@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 
 import pandas as pd
 
@@ -45,6 +46,7 @@ class SimulatedExecutionHandler(ExecutionHandler):
         if not self.pending:
             return []
 
+        self._riscala_per_split(event)
         fills: list[FillEvent] = []
         ancora_pendenti: list[OrderEvent] = []
         for order in self.pending:
@@ -66,6 +68,35 @@ class SimulatedExecutionHandler(ExecutionHandler):
             )
         self.pending = ancora_pendenti
         return fills
+
+    def _riscala_per_split(self, event: MarketEvent) -> None:
+        """Traduce gli ordini pendenti nella scala nuova se il simbolo fraziona oggi.
+
+        L'ordine e' stato deciso ieri, in azioni vecchie, e verra' eseguito all'apertura
+        di oggi, che e' gia' un prezzo post split: senza riscalarlo si comprerebbe meta'
+        del controvalore voluto.
+        """
+        riscalati: list[OrderEvent] = []
+        for order in self.pending:
+            fattore = self._split_factor(order.symbol, event.timestamp)
+            if fattore == 1.0:
+                riscalati.append(order)
+                continue
+            quantita = int(order.quantity * fattore)
+            if quantita <= 0:
+                continue
+            riscalati.append(replace(order, quantity=quantita))
+        self.pending = riscalati
+
+    def _split_factor(self, symbol: str, timestamp: object) -> float:
+        """Fattore di split della barra corrente del simbolo, 1.0 se non ce n'e'."""
+        bars = self.data_handler.get_latest_bars(symbol, 1)
+        if bars.empty or bars.index[-1] != pd.Timestamp(timestamp) or "split_factor" not in bars.columns:
+            return 1.0
+        valore = bars["split_factor"].iloc[-1]
+        if pd.isna(valore) or float(valore) <= 0.0:
+            return 1.0
+        return float(valore)
 
     def _open_price(self, symbol: str, timestamp: object) -> float | None:
         """Open della barra corrente del simbolo, None se il simbolo oggi non scambia."""

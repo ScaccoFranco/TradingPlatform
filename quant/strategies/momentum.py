@@ -26,7 +26,7 @@ class CrossSectionalMomentum(Strategy):
 
     def __init__(
         self,
-        data_handler: DataHandler,
+        data_handler: DataHandler | None,
         symbols: list[str],
         lookback_months: int = 12,
         skip_months: int = 1,
@@ -87,8 +87,9 @@ class CrossSectionalMomentum(Strategy):
     def momentum(self, symbol: str, timestamp: datetime) -> float | None:
         """Rendimento su adj_close fra lookback e skip; None se lo storico non basta.
 
-        Uno storico corto fa uscire il simbolo dalla classifica: trattarlo come
-        rendimento zero lo metterebbe artificialmente a meta' graduatoria.
+        Uno storico corto, o fermo da prima della finestra, fa uscire il simbolo dalla
+        classifica: trattarlo come rendimento zero lo metterebbe artificialmente a meta'
+        graduatoria, e un titolo che ha smesso di scambiare non ha un momentum.
         """
         bars = self.data_handler.get_latest_bars(symbol, self.window_bars)
         if bars.empty:
@@ -98,6 +99,10 @@ class CrossSectionalMomentum(Strategy):
         inizio = corrente - pd.DateOffset(months=self.lookback_months)
         fine = corrente - pd.DateOffset(months=self.skip_months)
         if bars.index[0] > inizio:
+            return None
+        if bars.index[-1] < fine:
+            # ultima barra piu' vecchia della finestra: il simbolo ha smesso di
+            # scambiare, e un prezzo fermo non e' un momentum, e' un dato scaduto
             return None
 
         prezzo_iniziale = self._ultimo_prezzo_entro(bars, inizio)

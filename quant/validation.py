@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import inspect
 import math
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import product
 from pathlib import Path
 from statistics import NormalDist
+from typing import Any, TypedDict
 
 import pandas as pd
 
 from quant.analysis import compute_metrics
+from quant.config import BacktestConfig
 from quant.data import DataHandler, ParquetDataHandler
 from quant.engine import Backtest
+from quant.events import FillEvent
 from quant.execution import SimulatedExecutionHandler
 from quant.portfolio import Portfolio
 from quant.risk import RiskManager
@@ -22,8 +26,21 @@ from quant.strategy import Strategy
 
 PERCORSO_DATI = Path("data/parquet")
 GAMMA = 0.5772156649015329  # costante di Eulero-Mascheroni
+MAX_BARRE = 1_000_000  # tutte le barre visibili: il cursore e' gia' alla fine della finestra
 
 type StrategyFactory = Callable[..., Strategy]
+type Params = dict[str, Any]
+
+
+class BacktestResult(TypedDict):
+    """Esito di `run_backtest`: resta un dizionario, ma con un tipo per ogni chiave."""
+
+    metrics: dict[str, float]
+    equity_curve: list[tuple[datetime, float]]
+    fills: list[FillEvent]
+    portfolio: Portfolio
+    backtest: Backtest
+    config: BacktestConfig
 type DataHandlerFactory = Callable[..., DataHandler]
 
 
@@ -42,18 +59,11 @@ def run_backtest(
     symbols: Sequence[str],
     start: str | datetime | None = None,
     end: str | datetime | None = None,
-    path: str | Path = PERCORSO_DATI,
-    initial_cash: float = 100_000.0,
-    commission_per_trade: float = 1.0,
-    slippage_bps: float = 5.0,
-    cash_buffer: float = 0.01,
-    credit_dividends: bool = True,
-    max_weight_per_symbol: float = 1.0,
-    max_gross_exposure: float = 1.0,
-    max_drawdown: float = 1.0,
+    config: BacktestConfig | None = None,
     warmup_start: str | datetime | None = None,
     data_handler_factory: DataHandlerFactory = build_data_handler,
-) -> dict[str, object]:
+    **legacy: Any,
+) -> BacktestResult:
     """Monta i cinque componenti su una finestra, esegue e restituisce metriche ed equity curve.
 
     `strategy_factory` non prende argomenti: il data handler della finestra viene
@@ -63,21 +73,31 @@ def run_backtest(
     Con `warmup_start` il backtest parte prima e le metriche vengono calcolate solo da
     `start`: una strategia con dodici mesi di lookback altrimenti passerebbe il primo
     anno in cassa per mancanza di storico, e il confronto con i benchmark sarebbe falsato.
+
+    I parametri stanno in `BacktestConfig`. I vecchi argomenti sciolti restano accettati
+    per una release, con un avviso di deprecazione.
     """
-    data_handler = data_handler_factory(path, symbols, warmup_start or start, end)
+    impostazioni = _config_effettiva(config, legacy)
+    data_handler = data_handler_factory(impostazioni.path, symbols, warmup_start or start, end)
     strategy = _costruisci_strategia(strategy_factory, data_handler)
     portfolio = Portfolio(
         data_handler,
-        initial_cash=initial_cash,
-        cash_buffer=cash_buffer,
-        credit_dividends=credit_dividends,
+        initial_cash=impostazioni.initial_cash,
+        cash_buffer=impostazioni.cash_buffer,
+        credit_dividends=impostazioni.credit_dividends,
     )
     backtest = Backtest(
         data_handler=data_handler,
         strategy=strategy,
         portfolio=portfolio,
-        risk_manager=RiskManager(max_weight_per_symbol, max_gross_exposure, max_drawdown),
-        execution_handler=SimulatedExecutionHandler(data_handler, commission_per_trade, slippage_bps),
+        risk_manager=RiskManager(
+            impostazioni.max_weight_per_symbol,
+            impostazioni.max_gross_exposure,
+            impostazioni.max_drawdown,
+        ),
+        execution_handler=SimulatedExecutionHandler(
+            data_handler, impostazioni.commission_per_trade, impostazioni.slippage_bps
+        ),
     )
     backtest.run()
 
@@ -87,15 +107,47 @@ def run_backtest(
         soglia = pd.Timestamp(start)
         equity_curve = [(t, v) for t, v in equity_curve if pd.Timestamp(t) >= soglia]
         fills = [f for f in fills if pd.Timestamp(f.timestamp) >= soglia]
-        equity_curve = _riporta_alla_base(equity_curve, initial_cash)
+        equity_curve = _riporta_alla_base(equity_curve, impostazioni.initial_cash)
 
     return {
-        "metrics": compute_metrics(equity_curve, fills),
+        "metrics": compute_metrics(
+            equity_curve, fills, risk_free=risk_free_series(data_handler, impostazioni.risk_free_symbol)
+        ),
         "equity_curve": equity_curve,
         "fills": fills,
         "portfolio": portfolio,
         "backtest": backtest,
+        "config": impostazioni,
     }
+
+
+def _config_effettiva(config: BacktestConfig | None, legacy: Mapping[str, Any]) -> BacktestConfig:
+    """Config esplicita, eventualmente sovrascritta dai vecchi argomenti sciolti."""
+    base = config or BacktestConfig()
+    if not legacy:
+        return base
+    warnings.warn(
+        "gli argomenti sciolti di run_backtest sono deprecati: usare BacktestConfig",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return base.with_overrides(**dict(legacy))
+
+
+def risk_free_series(data_handler: DataHandler, symbol: str | None) -> pd.Series | None:
+    """Rendimenti giornalieri del titolo monetario, presi dal data handler della finestra.
+
+    Usa `adj_close` perche' e' un rendimento, e serve solo a valutare a posteriori:
+    la strategia non lo vede mai.
+    """
+    if symbol is None or symbol not in getattr(data_handler, "symbols", []):
+        return None
+    barre = data_handler.get_latest_bars(symbol, MAX_BARRE)
+    if barre.empty or "adj_close" not in barre.columns:
+        return None
+    serie = barre["adj_close"].pct_change().dropna()
+    serie.index = pd.DatetimeIndex(serie.index).normalize()
+    return serie
 
 
 def _costruisci_strategia(strategy_factory: StrategyFactory, data_handler: DataHandler) -> Strategy:
@@ -106,26 +158,30 @@ def _costruisci_strategia(strategy_factory: StrategyFactory, data_handler: DataH
     return strategy
 
 
-def parameter_combinations(param_grid: Mapping[str, Iterable[object]]) -> list[dict[str, object]]:
+def parameter_combinations(param_grid: Mapping[str, Iterable[Any]]) -> list[Params]:
     """Prodotto cartesiano della griglia, in ordine deterministico."""
     if not param_grid:
         return [{}]
     chiavi = list(param_grid)
-    return [dict(zip(chiavi, valori)) for valori in product(*(list(param_grid[k]) for k in chiavi))]
+    valori_per_chiave = (list(param_grid[k]) for k in chiavi)
+    return [dict(zip(chiavi, valori, strict=True)) for valori in product(*valori_per_chiave)]
 
 
 def parameter_sensitivity(
-    strategy_factory_from_params: Callable[[dict[str, object]], StrategyFactory],
+    strategy_factory_from_params: Callable[[Params], StrategyFactory],
     param_grid: Mapping[str, Iterable[object]],
     symbols: Sequence[str],
     start: str | datetime | None = None,
     end: str | datetime | None = None,
-    **engine_kwargs: object,
+    config: BacktestConfig | None = None,
+    **engine_kwargs: Any,
 ) -> pd.DataFrame:
     """Una riga per combinazione di parametri, per distinguere una regione stabile da un picco."""
     righe = []
     for params in parameter_combinations(param_grid):
-        risultato = run_backtest(strategy_factory_from_params(params), symbols, start, end, **engine_kwargs)
+        risultato = run_backtest(
+            strategy_factory_from_params(params), symbols, start, end, config=config, **engine_kwargs
+        )
         righe.append({**params, **risultato["metrics"]})
     return pd.DataFrame(righe)
 
@@ -137,7 +193,7 @@ def walk_forward_windows(
     test_years: int = 1,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]]:
     """Finestre (train_inizio, train_fine, test_inizio, test_fine) che avanzano di `test_years`."""
-    finestre = []
+    finestre: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
     train_inizio = pd.Timestamp(start)
     limite = pd.Timestamp(end)
     while True:
@@ -151,7 +207,7 @@ def walk_forward_windows(
 
 
 def walk_forward(
-    strategy_factory_from_params: Callable[[dict[str, object]], StrategyFactory],
+    strategy_factory_from_params: Callable[[Params], StrategyFactory],
     param_grid: Mapping[str, Iterable[object]],
     symbols: Sequence[str],
     start: str | datetime,
@@ -159,7 +215,8 @@ def walk_forward(
     train_years: int = 5,
     test_years: int = 1,
     warmup_years: int = 1,
-    **engine_kwargs: object,
+    config: BacktestConfig | None = None,
+    **engine_kwargs: Any,
 ) -> pd.DataFrame:
     """Sceglie i parametri per Sharpe sul train e li applica al test successivo.
 
@@ -182,6 +239,7 @@ def walk_forward(
             train_inizio,
             train_fine,
             warmup_years,
+            config,
             engine_kwargs,
         )
         risultato_oos = run_backtest(
@@ -189,6 +247,7 @@ def walk_forward(
             symbols,
             test_inizio,
             test_fine,
+            config=config,
             warmup_start=_riscaldamento(test_inizio, warmup_years),
             **engine_kwargs,
         )
@@ -220,14 +279,15 @@ def walk_forward(
 
 
 def _seleziona_parametri(
-    strategy_factory_from_params: Callable[[dict[str, object]], StrategyFactory],
-    combinazioni: list[dict[str, object]],
+    strategy_factory_from_params: Callable[[Params], StrategyFactory],
+    combinazioni: list[Params],
     symbols: Sequence[str],
     train_inizio: pd.Timestamp,
     train_fine: pd.Timestamp,
     warmup_years: int,
-    engine_kwargs: Mapping[str, object],
-) -> tuple[dict[str, object], dict[str, float]]:
+    config: BacktestConfig | None,
+    engine_kwargs: Mapping[str, Any],
+) -> tuple[Params, dict[str, float]]:
     """Parametri con lo Sharpe piu' alto sul solo periodo di train."""
     migliori = combinazioni[0]
     metriche_migliori: dict[str, float] | None = None
@@ -237,6 +297,7 @@ def _seleziona_parametri(
             symbols,
             train_inizio,
             train_fine,
+            config=config,
             warmup_start=_riscaldamento(train_inizio, warmup_years),
             **engine_kwargs,
         )["metrics"]

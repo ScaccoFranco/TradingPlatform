@@ -10,6 +10,7 @@ import pytest
 from quant.analysis import compute_metrics
 from quant.data import ParquetDataHandler
 from quant.engine import Backtest
+from quant.events import OrderDirection, OrderEvent
 from quant.execution import SimulatedExecutionHandler
 from quant.portfolio import Portfolio
 from quant.strategy import BuyAndHoldStrategy
@@ -72,17 +73,76 @@ def test_la_cassa_limita_la_quantita_ordinata(spy_parquet_dir: Path) -> None:
     assert portfolio.positions["SPY"] == int(CAPITALE * 0.5 // barre["close"].iloc[0])
 
 
-def test_cedola_accreditata_in_cassa(dividend_parquet_dir: Path) -> None:
-    con_cedole = esegui(dividend_parquet_dir, credit_dividends=True)
-    senza_cedole = esegui(dividend_parquet_dir, credit_dividends=False)
+def test_cedola_accreditata_in_cassa(corporate_actions_parquet_dir: Path) -> None:
+    """La cassa cresce esattamente di quantita' per cedola, letta dalla colonna dividends."""
+    con_cedole = esegui(corporate_actions_parquet_dir, credit_dividends=True)
+    senza_cedole = esegui(corporate_actions_parquet_dir, credit_dividends=False)
     quantita = con_cedole.positions["SPY"]
 
     assert con_cedole.dividends_received == pytest.approx(quantita * 1.0)
     assert senza_cedole.dividends_received == 0.0
-    assert con_cedole.equity_curve[-1][1] - senza_cedole.equity_curve[-1][1] == pytest.approx(quantita * 1.0)
+    assert con_cedole.cash - senza_cedole.cash == pytest.approx(quantita * 1.0)
 
 
 def test_nessuna_cedola_fantasma_su_prezzi_lisci(spy_parquet_dir: Path) -> None:
-    """adj_close proporzionale al close non deve generare accrediti."""
+    """Senza colonna dividends non deve comparire nessun accredito."""
     portfolio = esegui(spy_parquet_dir, credit_dividends=True)
     assert portfolio.dividends_received == 0.0
+
+
+def test_lo_split_lascia_invariato_il_valore(corporate_actions_parquet_dir: Path) -> None:
+    """Attraverso uno split 2:1 il portafoglio cambia solo per la frazione liquidata."""
+    handler = ParquetDataHandler(corporate_actions_parquet_dir, ["SPY"])
+    portfolio = Portfolio(handler, initial_cash=CAPITALE)
+    for _ in range(10):
+        handler.update_bars()
+    portfolio.positions["SPY"] = 101
+    portfolio.cash = 0.0
+    prima = portfolio.total_value()
+
+    evento = handler.update_bars()[0]
+    assert handler.get_latest_bars("SPY", 1)["split_factor"].iloc[-1] == 2.0
+    portfolio.on_market(evento)
+
+    assert portfolio.positions["SPY"] == 202
+    assert portfolio.total_value() == pytest.approx(prima)
+    assert portfolio.cash == 0.0
+
+
+def test_lo_split_liquida_il_residuo_frazionario(corporate_actions_parquet_dir: Path) -> None:
+    """Un raggruppamento inverso lascia mezza azione: viene monetizzata all'apertura."""
+    handler = ParquetDataHandler(corporate_actions_parquet_dir, ["SPY"])
+    frame = pd.read_parquet(corporate_actions_parquet_dir / "SPY.parquet")
+    frame.loc[frame.index[10], "split_factor"] = 0.5
+    frame.to_parquet(corporate_actions_parquet_dir / "SPY.parquet")
+
+    handler = ParquetDataHandler(corporate_actions_parquet_dir, ["SPY"])
+    portfolio = Portfolio(handler, initial_cash=0.0)
+    for _ in range(10):
+        handler.update_bars()
+    portfolio.positions["SPY"] = 101
+
+    evento = handler.update_bars()[0]
+    apertura = float(handler.get_latest_bars("SPY", 1)["open"].iloc[-1])
+    portfolio.on_market(evento)
+
+    assert portfolio.positions["SPY"] == 50
+    assert portfolio.cash == pytest.approx(0.5 * apertura)
+
+
+def test_ordine_pendente_attraverso_lo_split(corporate_actions_parquet_dir: Path) -> None:
+    """Un ordine deciso prima dello split viene riempito nella scala nuova."""
+    handler = ParquetDataHandler(corporate_actions_parquet_dir, ["SPY"])
+    esecuzione = SimulatedExecutionHandler(handler)
+    for _ in range(10):
+        handler.update_bars()
+
+    ordine = OrderEvent(handler.current_timestamp(), "SPY", OrderDirection.BUY, 100)
+    esecuzione.on_order(ordine)
+
+    evento = handler.update_bars()[0]
+    fills = esecuzione.on_market(evento)
+    assert len(fills) == 1
+    assert fills[0].quantity == 200
+    assert fills[0].fill_price == 50.0
+    assert fills[0].quantity * fills[0].fill_price == pytest.approx(ordine.quantity * 100.0)

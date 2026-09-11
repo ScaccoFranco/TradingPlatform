@@ -28,7 +28,6 @@ class FixedWeightsStrategy(Strategy):
 
     def on_bar(self, event: MarketEvent) -> list[SignalEvent]:
         """Riporta ogni simbolo al peso obiettivo, mensilmente o una volta sola."""
-        assert self.data_handler is not None
         if self.rebalance_monthly:
             if not is_first_trading_day_of_month(event.timestamp, self.data_handler):
                 return []

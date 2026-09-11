@@ -16,7 +16,18 @@ class Strategy(ABC):
     """
 
     def __init__(self, data_handler: DataHandler | None = None) -> None:
-        self.data_handler = data_handler
+        self._data_handler = data_handler
+
+    @property
+    def data_handler(self) -> DataHandler:
+        """Data handler collegato; leggerlo prima del collegamento e' un errore di cablaggio."""
+        if self._data_handler is None:
+            raise RuntimeError(f"{type(self).__name__}: data handler non ancora collegato")
+        return self._data_handler
+
+    @data_handler.setter
+    def data_handler(self, valore: DataHandler) -> None:
+        self._data_handler = valore
 
     @abstractmethod
     def on_bar(self, event: MarketEvent) -> list[SignalEvent]:
@@ -34,7 +45,7 @@ class NoOpStrategy(Strategy):
 class BuyAndHoldStrategy(Strategy):
     """Compra il simbolo alla prima barra utile e non emette altro."""
 
-    def __init__(self, data_handler: DataHandler, symbol: str, strength: float = 1.0) -> None:
+    def __init__(self, data_handler: DataHandler | None, symbol: str, strength: float = 1.0) -> None:
         super().__init__(data_handler)
         self.symbol = symbol
         self.strength = strength

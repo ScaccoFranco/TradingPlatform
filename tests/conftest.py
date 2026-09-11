@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+
+# I test non devono pagare il costo del log applicativo: in produzione i fill restano INFO.
+os.environ.setdefault("QUANT_LOG_LEVEL", "WARNING")
+
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +26,8 @@ def make_frame(dates: pd.DatetimeIndex, base: float) -> pd.DataFrame:
             "close": closes,
             "adj_close": [c * 0.9 for c in closes],
             "volume": [1_000_000 + i for i in range(len(dates))],
+            "dividends": [0.0] * len(dates),
+            "split_factor": [1.0] * len(dates),
         },
         index=dates,
     )
@@ -80,8 +87,8 @@ def spy_parquet_dir(tmp_path: Path) -> Path:
     frame = pd.DataFrame(
         {
             "open": opens,
-            "high": [max(o, c) + 1.0 for o, c in zip(opens, closes)],
-            "low": [min(o, c) - 1.0 for o, c in zip(opens, closes)],
+            "high": [max(o, c) + 1.0 for o, c in zip(opens, closes, strict=False)],
+            "low": [min(o, c) - 1.0 for o, c in zip(opens, closes, strict=False)],
             "close": closes,
             "adj_close": [c * 0.98 for c in closes],
             "volume": [2_000_000] * len(dates),
@@ -104,8 +111,8 @@ def gap_up_parquet_dir(tmp_path: Path) -> Path:
     frame = pd.DataFrame(
         {
             "open": opens,
-            "high": [max(o, c) for o, c in zip(opens, closes)],
-            "low": [min(o, c) for o, c in zip(opens, closes)],
+            "high": [max(o, c) for o, c in zip(opens, closes, strict=False)],
+            "low": [min(o, c) for o, c in zip(opens, closes, strict=False)],
             "close": closes,
             "adj_close": closes,
             "volume": [1_000_000] * len(dates),
@@ -120,31 +127,33 @@ def gap_up_parquet_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def dividend_parquet_dir(tmp_path: Path) -> Path:
-    """SPY a prezzo fisso 100 con una cedola da 1.0 per azione alla sesta barra.
+def corporate_actions_parquet_dir(tmp_path: Path) -> Path:
+    """SPY a prezzo fisso con uno split 2:1 alla barra 10 e una cedola da 1.0 alla barra 15.
 
-    L'adj_close codifica la cedola nel rapporto fra due barre consecutive:
-    adj_t / adj_(t-1) = (close_t + cedola) / close_(t-1).
+    I prezzi sono grezzi, come quelli che salva `scripts/download.py`: il giorno dello
+    split il prezzo si dimezza e il fattore vale 2.
     """
-    dates = pd.bdate_range("2020-01-01", periods=10)
-    fattori = [1.0] * len(dates)
-    fattori[5] = 1.01
-    adj = [100.0]
-    for f in fattori[1:]:
-        adj.append(adj[-1] * f)
+    dates = pd.bdate_range("2020-01-01", periods=20)
+    closes = [100.0] * 10 + [50.0] * 10
+    split = [1.0] * 20
+    split[10] = 2.0
+    dividendi = [0.0] * 20
+    dividendi[15] = 1.0
     frame = pd.DataFrame(
         {
-            "open": [100.0] * len(dates),
-            "high": [100.0] * len(dates),
-            "low": [100.0] * len(dates),
-            "close": [100.0] * len(dates),
-            "adj_close": adj,
-            "volume": [1_000_000] * len(dates),
+            "open": closes,
+            "high": [c + 1.0 for c in closes],
+            "low": [c - 1.0 for c in closes],
+            "close": closes,
+            "adj_close": [100.0] * 20,
+            "volume": [1_000_000.0] * 20,
+            "dividends": dividendi,
+            "split_factor": split,
         },
         index=dates,
     )
     frame.index.name = "date"
-    directory = tmp_path / "dividendi"
+    directory = tmp_path / "operazioni"
     directory.mkdir()
     frame.to_parquet(directory / "SPY.parquet")
     return directory
@@ -156,16 +165,18 @@ def serie_geometrica(dates: pd.DatetimeIndex, iniziale: float, rendimento_giorna
 
 
 def scrivi_serie(directory: Path, symbol: str, dates: pd.DatetimeIndex, closes: list[float]) -> None:
-    """Salva un Parquet con adj_close uguale al close: nessuna cedola nei test di momentum."""
+    """Salva un Parquet senza operazioni sul capitale: niente cedole, nessuno split."""
     opens = [closes[0]] + closes[:-1]
     frame = pd.DataFrame(
         {
             "open": opens,
-            "high": [max(o, c) for o, c in zip(opens, closes)],
-            "low": [min(o, c) for o, c in zip(opens, closes)],
+            "high": [max(o, c) for o, c in zip(opens, closes, strict=False)],
+            "low": [min(o, c) for o, c in zip(opens, closes, strict=False)],
             "close": closes,
             "adj_close": closes,
-            "volume": [1_000_000] * len(dates),
+            "volume": [1_000_000.0] * len(dates),
+            "dividends": [0.0] * len(dates),
+            "split_factor": [1.0] * len(dates),
         },
         index=dates,
     )
@@ -177,6 +188,7 @@ MOMENTUM_UNIVERSO = ["AAA", "BBB", "CCC", "DDD", "EEE"]
 MOMENTUM_SIMBOLI = [*MOMENTUM_UNIVERSO, "SPY", "SHY"]
 BARRE_MOMENTUM = 500
 BARRE_STORICO_CORTO = 100
+BARRE_ZZZ = 400  # ZZZ scambia per venti mesi e poi smette: delisting a meta' della serie
 
 
 def _costruisci_universo(directory: Path, closes_spy: list[float], dates: pd.DatetimeIndex) -> None:
@@ -223,4 +235,16 @@ def walkforward_parquet_dir(tmp_path: Path) -> Path:
     scrivi_serie(directory, "CCC", dates, serie_geometrica(dates, 100.0, -0.0002))
     scrivi_serie(directory, "SPY", dates, serie_geometrica(dates, 200.0, 0.0002))
     scrivi_serie(directory, "SHY", dates, serie_geometrica(dates, 80.0, 0.00005))
+    return directory
+
+
+@pytest.fixture
+def delisting_parquet_dir(tmp_path: Path) -> Path:
+    """Universo in cui ZZZ smette di scambiare a meta' periodo, come un delisting."""
+    dates = pd.bdate_range("2015-01-01", periods=BARRE_MOMENTUM)
+    directory = tmp_path / "delisting"
+    directory.mkdir()
+    _costruisci_universo(directory, serie_geometrica(dates, 200.0, 0.0003), dates)
+    vive = dates[:BARRE_ZZZ]
+    scrivi_serie(directory, "ZZZ", vive, serie_geometrica(vive, 100.0, 0.002))
     return directory

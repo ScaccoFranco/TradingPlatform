@@ -15,7 +15,9 @@ from quant.strategy import BuyAndHoldStrategy
 CAPITALE = 100_000.0
 
 
-def esegui(directory: Path, commissione: float = 0.0, slippage: float = 0.0) -> tuple[Portfolio, ParquetDataHandler]:
+def esegui(
+    directory: Path, commissione: float = 0.0, slippage: float = 0.0
+) -> tuple[Portfolio, ParquetDataHandler]:
     """Buy-and-hold su SPY con i costi indicati."""
     handler = ParquetDataHandler(directory, ["SPY"])
     portfolio = Portfolio(handler, initial_cash=CAPITALE)

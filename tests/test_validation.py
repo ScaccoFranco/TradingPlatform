@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from quant.config import BacktestConfig
 from quant.data import ParquetDataHandler
 from quant.events import MarketEvent, SignalDirection, SignalEvent
 from quant.strategy import Strategy
@@ -77,7 +78,7 @@ def test_numero_di_finestre() -> None:
 
 def test_finestre_non_si_sovrappongono_nel_test() -> None:
     finestre = walk_forward_windows("2005-01-01", "2014-12-31")
-    for precedente, successiva in zip(finestre, finestre[1:]):
+    for precedente, successiva in zip(finestre, finestre[1:], strict=False):
         assert precedente[3] < successiva[2]
         assert precedente[1] < precedente[2]
 
@@ -88,7 +89,7 @@ def test_run_backtest_restituisce_metriche_ed_equity(walkforward_parquet_dir: Pa
         SIMBOLI,
         "2005-01-01",
         "2006-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
     )
     assert risultato["metrics"]["rendimento_totale"] > 0.0
     assert len(risultato["equity_curve"]) > 400
@@ -102,7 +103,7 @@ def test_walk_forward_produce_una_riga_per_finestra(walkforward_parquet_dir: Pat
         SIMBOLI,
         "2005-01-01",
         "2014-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
     )
     assert len(tabella) == 5
     assert list(tabella["finestra"]) == [0, 1, 2, 3, 4]
@@ -117,7 +118,7 @@ def test_walk_forward_concatena_le_equity_di_test(walkforward_parquet_dir: Path)
         SIMBOLI,
         "2005-01-01",
         "2014-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
     )
     equity = tabella.attrs["equity_oos"]
     date = [t for t, _ in equity]
@@ -140,7 +141,7 @@ def test_la_selezione_non_tocca_le_barre_di_test(walkforward_parquet_dir: Path) 
         SIMBOLI,
         "2005-01-01",
         "2014-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
         data_handler_factory=lambda path, symbols, start, end: HandlerSpia(
             path, symbols, start, end, registro
         ),
@@ -163,7 +164,7 @@ def test_parameter_sensitivity_una_riga_per_combinazione(walkforward_parquet_dir
         SIMBOLI,
         "2005-01-01",
         "2007-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
     )
     assert len(tabella) == len(parameter_combinations(GRIGLIA)) == 2
     assert set(tabella["symbol"]) == {"AAA", "CCC"}
@@ -208,17 +209,47 @@ def test_il_riscaldamento_non_conta_nelle_metriche(walkforward_parquet_dir: Path
         SIMBOLI,
         "2008-01-01",
         "2009-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
     )
     caldo = run_backtest(
         lambda: CompraSimbolo("AAA"),
         SIMBOLI,
         "2008-01-01",
         "2009-12-31",
-        path=walkforward_parquet_dir,
+        config=BacktestConfig(path=walkforward_parquet_dir),
         warmup_start="2006-01-01",
     )
     assert pd.Timestamp(caldo["equity_curve"][0][0]).year == 2008
     assert len(caldo["equity_curve"]) == len(freddo["equity_curve"])
     assert caldo["fills"] == []
     assert len(freddo["fills"]) == 1
+
+
+def test_argomenti_sciolti_ancora_accettati_ma_deprecati(walkforward_parquet_dir: Path) -> None:
+    """Per una release i vecchi kwargs funzionano, con un avviso esplicito."""
+    with pytest.warns(DeprecationWarning, match="BacktestConfig"):
+        vecchio = run_backtest(
+            lambda: CompraSimbolo("AAA"), SIMBOLI, "2005-01-01", "2006-12-31", path=walkforward_parquet_dir
+        )
+    nuovo = run_backtest(
+        lambda: CompraSimbolo("AAA"),
+        SIMBOLI,
+        "2005-01-01",
+        "2006-12-31",
+        config=BacktestConfig(path=walkforward_parquet_dir),
+    )
+    assert vecchio["equity_curve"] == nuovo["equity_curve"]
+    assert vecchio["config"] == nuovo["config"]
+
+
+def test_parametro_sconosciuto_e_un_errore(walkforward_parquet_dir: Path) -> None:
+    """Un refuso in un nome di parametro non deve passare in silenzio."""
+    with pytest.raises(TypeError, match="slipage_bps"), pytest.warns(DeprecationWarning):
+        run_backtest(
+            lambda: CompraSimbolo("AAA"),
+            SIMBOLI,
+            "2005-01-01",
+            "2006-12-31",
+            config=BacktestConfig(path=walkforward_parquet_dir),
+            slipage_bps=5.0,
+        )

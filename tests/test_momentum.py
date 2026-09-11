@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from quant.data import ParquetDataHandler
 from quant.events import SignalDirection, SignalEvent
+from quant.portfolio import Portfolio
 from quant.strategies.momentum import CrossSectionalMomentum
 
 UNIVERSO = ["AAA", "BBB", "CCC", "DDD", "EEE"]
@@ -138,3 +140,64 @@ def test_pesi_fissi_senza_ribilanciamento_entrano_una_volta_sola(momentum_parque
         for event in handler.update_bars():
             segnali.extend(strategia.on_bar(event))
     assert len(segnali) == 1
+
+
+DELISTATI = [*UNIVERSO, "ZZZ"]
+SIMBOLI_DELISTING = [*DELISTATI, "SPY", "SHY"]
+
+
+def test_simbolo_delistato_esce_dal_ranking(delisting_parquet_dir: Path) -> None:
+    """ZZZ ha il momentum piu' alto finche' scambia, poi sparisce dalla classifica."""
+    handler = ParquetDataHandler(delisting_parquet_dir, SIMBOLI_DELISTING)
+    strategia = CrossSectionalMomentum(handler, DELISTATI, top_n=2)
+    for _ in range(350):
+        handler.update_bars()
+
+    a_meta = pd.Timestamp(handler.current_timestamp())
+    assert "ZZZ" in dict(strategia.ranking(a_meta))
+
+    handler.advance_to_latest()
+    alla_fine = pd.Timestamp(handler.current_timestamp())
+    classifica = dict(strategia.ranking(alla_fine))
+    assert strategia.momentum("ZZZ", alla_fine) is None
+    assert "ZZZ" not in classifica
+    assert classifica and min(classifica.values()) < 0.0
+
+
+def test_posizione_su_simbolo_fermo_segnalata_a_warning(delisting_parquet_dir: Path, monkeypatch) -> None:
+    """Il portafoglio avvisa una volta sola quando una posizione smette di avere barre."""
+    from quant import portfolio as modulo_portfolio
+
+    avvisi: list[dict] = []
+    monkeypatch.setattr(
+        modulo_portfolio,
+        "logger",
+        SimpleNamespace(
+            warning=lambda evento, **dati: avvisi.append({"evento": evento, **dati}),
+            info=lambda evento, **dati: None,
+        ),
+    )
+
+    handler = ParquetDataHandler(delisting_parquet_dir, SIMBOLI_DELISTING)
+    portafoglio = modulo_portfolio.Portfolio(handler, initial_cash=100_000.0)
+    portafoglio.positions["ZZZ"] = 10
+    while handler.continue_backtest:
+        portafoglio.on_market(handler.update_bars()[0])
+
+    assert portafoglio.stale_symbols == {"ZZZ"}
+    fermi = [a for a in avvisi if a["evento"] == "posizione_senza_barre"]
+    assert len(fermi) == 1
+    assert fermi[0]["symbol"] == "ZZZ"
+    assert fermi[0]["quantity"] == 10
+    assert fermi[0]["giorni_di_ritardo"] > 5
+
+
+def test_la_posizione_ferma_resta_valorizzata_allultimo_prezzo(delisting_parquet_dir: Path) -> None:
+    """Segnalare non significa cancellare: il valore resta all'ultimo prezzo noto."""
+    handler = ParquetDataHandler(delisting_parquet_dir, SIMBOLI_DELISTING)
+    portafoglio = Portfolio(handler, initial_cash=0.0)
+    portafoglio.positions["ZZZ"] = 10
+    handler.advance_to_latest()
+    ultimo = float(handler.get_latest_bars("ZZZ", 1)["close"].iloc[-1])
+
+    assert portafoglio.total_value() == pytest.approx(10 * ultimo)

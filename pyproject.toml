@@ -6,14 +6,20 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "pandas",
     "pyarrow",
-    "duckdb",
     "yfinance",
     "matplotlib",
+    "alpaca-py",
+    "apscheduler",
+    "pydantic-settings",
+    "structlog",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
+    "ruff",
+    "mypy",
+    "hypothesis",
 ]
 
 [build-system]
@@ -25,3 +31,21 @@ packages = ["quant"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["quant"]
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = ["yfinance.*", "alpaca.*", "apscheduler.*", "matplotlib.*", "structlog.*", "pandas.*"]
+ignore_missing_imports = true

@@ -10,7 +10,7 @@ import pandas as pd
 
 from quant.events import MarketEvent
 
-COLUMNS = ("open", "high", "low", "close", "adj_close", "volume")
+COLUMNS = ("open", "high", "low", "close", "adj_close", "volume", "dividends", "split_factor")
 
 
 class DataHandler(ABC):
@@ -34,32 +34,34 @@ class DataHandler(ABC):
     def emitted_timeline(self) -> pd.DatetimeIndex:
         """Date gia' emesse, fino al cursore incluso: nessuna data futura."""
 
+    def advance_to_latest(self) -> MarketEvent | None:
+        """Consuma tutte le barre e restituisce l'ultimo MarketEvent emesso.
+
+        In live la storia non va rigiocata a pezzi: si porta il cursore sull'ultima
+        barra disponibile e si lavora su quella. Vale per qualunque data handler,
+        perche' usa solo `update_bars` e `continue_backtest`.
+        """
+        ultimo: MarketEvent | None = None
+        while self.continue_backtest:
+            for evento in self.update_bars():
+                ultimo = evento
+        return ultimo
+
     @abstractmethod
     def current_timestamp(self) -> datetime | None:
         """Timestamp del cursore, None se il backtest non e' ancora partito."""
 
 
-class ParquetDataHandler(DataHandler):
-    """DataHandler su file Parquet, uno per simbolo, con indice temporale unificato."""
+class FrameDataHandler(DataHandler):
+    """Logica comune del cursore su DataFrame gia' in memoria.
 
-    def __init__(
-        self,
-        path: str | Path,
-        symbols: list[str],
-        start: str | datetime | None = None,
-        end: str | datetime | None = None,
-    ) -> None:
-        self.symbols = list(symbols)
-        self._data: dict[str, pd.DataFrame] = {}
-        for symbol in self.symbols:
-            frame = pd.read_parquet(Path(path) / f"{symbol}.parquet")
-            frame = frame.sort_index()
-            if start is not None:
-                frame = frame[frame.index >= pd.Timestamp(start)]
-            if end is not None:
-                frame = frame[frame.index <= pd.Timestamp(end)]
-            self._data[symbol] = frame
+    Backtest e live condividono questa classe: cambia solo da dove arrivano i dati,
+    non il modo in cui vengono resi visibili alla strategia.
+    """
 
+    def __init__(self, data: dict[str, pd.DataFrame]) -> None:
+        self._data = {symbol: frame.sort_index() for symbol, frame in data.items()}
+        self.symbols = list(self._data)
         index = pd.DatetimeIndex([])
         for frame in self._data.values():
             index = index.union(pd.DatetimeIndex(frame.index))
@@ -105,13 +107,15 @@ class ParquetDataHandler(DataHandler):
         """Timestamp della barra precedente a quella corrente, None se non esiste."""
         if self._cursor < 1:
             return None
-        return self._timeline[self._cursor - 1].to_pydatetime()
+        precedente: datetime = self._timeline[self._cursor - 1].to_pydatetime()
+        return precedente
 
     def current_timestamp(self) -> datetime | None:
         """Timestamp del cursore corrente."""
         if self._cursor < 0:
             return None
-        return self._timeline[self._cursor].to_pydatetime()
+        corrente: datetime = self._timeline[self._cursor].to_pydatetime()
+        return corrente
 
     def has_bar(self, symbol: str) -> bool:
         """True se il simbolo ha una barra proprio al timestamp del cursore."""
@@ -123,3 +127,24 @@ class ParquetDataHandler(DataHandler):
     def timeline(self) -> pd.DatetimeIndex:
         """Indice temporale unificato dei simboli caricati."""
         return self._timeline
+
+
+class ParquetDataHandler(FrameDataHandler):
+    """DataHandler su file Parquet, uno per simbolo, con indice temporale unificato."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        symbols: list[str],
+        start: str | datetime | None = None,
+        end: str | datetime | None = None,
+    ) -> None:
+        data: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            frame = pd.read_parquet(Path(path) / f"{symbol}.parquet")
+            if start is not None:
+                frame = frame[frame.index >= pd.Timestamp(start)]
+            if end is not None:
+                frame = frame[frame.index <= pd.Timestamp(end)]
+            data[symbol] = frame
+        super().__init__(data)

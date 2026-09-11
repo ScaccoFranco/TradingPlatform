@@ -15,8 +15,16 @@ from quant.events import (
     SignalDirection,
     SignalEvent,
 )
+from quant.logging import get_logger
 
-EPS_DIVIDENDO = 1e-5  # sotto questa frazione del prezzo il residuo e' rumore numerico, non cedola
+logger = get_logger("portfolio")
+
+def _valore(barra: pd.Series, colonna: str, default: float) -> float:
+    """Legge un campo della barra tollerando colonne assenti o valori mancanti."""
+    valore = barra.get(colonna, default)
+    if valore is None or pd.isna(valore):
+        return default
+    return float(valore)
 
 
 class Portfolio:
@@ -29,6 +37,7 @@ class Portfolio:
         max_weight: float = 1.0,
         cash_buffer: float = 0.0,
         credit_dividends: bool = False,
+        stale_after_days: int = 5,
     ) -> None:
         self.data_handler = data_handler
         self.initial_cash = float(initial_cash)
@@ -36,20 +45,31 @@ class Portfolio:
         self.max_weight = float(max_weight)
         self.cash_buffer = float(cash_buffer)
         self.credit_dividends = credit_dividends
+        self.stale_after_days = stale_after_days
+        self.stale_symbols: set[str] = set()
         self.positions: dict[str, int] = {}
         self.equity_curve: list[tuple[datetime, float]] = []
+        self.peak_equity = float(initial_cash)
         self.fills: list[FillEvent] = []
         self.dividends_received = 0.0
         self._cassa_attesa = 0.0
         self._delta_attesi: dict[str, int] = {}
 
     def on_market(self, event: MarketEvent) -> None:
-        """Accredita le cedole, poi mark-to-market sui close e nuovo punto di equity curve."""
+        """Operazioni sul capitale, poi mark-to-market sui close e punto di equity curve.
+
+        L'ordine conta: prima gli split cambiano il numero di azioni, poi le cedole
+        entrano in cassa, solo alla fine si valorizza il portafoglio.
+        """
         self._cassa_attesa = 0.0
         self._delta_attesi = {}
+        self._apply_splits(event)
         if self.credit_dividends:
             self._credit_dividends(event)
-        self.equity_curve.append((event.timestamp, self.total_value()))
+        self._segnala_posizioni_ferme(event)
+        valore = self.total_value()
+        self.equity_curve.append((event.timestamp, valore))
+        self.peak_equity = max(self.peak_equity, valore)
 
     def on_signal(self, event: SignalEvent) -> OrderEvent | None:
         """Traduce forza e direzione in un ordine per la differenza dalla posizione attuale."""
@@ -105,31 +125,101 @@ class Portfolio:
         disponibile = max(0.0, self.cash + self._cassa_attesa) * (1.0 - self.cash_buffer)
         return int(disponibile // price)
 
-    def _credit_dividends(self, event: MarketEvent) -> None:
-        """Accredita in cassa la cedola implicita nel rapporto fra adj_close e close.
+    def _apply_splits(self, event: MarketEvent) -> None:
+        """Riscala le posizioni dei simboli che frazionano oggi, liquidando il residuo.
 
-        Con adj_t / adj_(t-1) = (close_t + cedola) / close_(t-1) si ricava la cedola
-        per azione: e' il modo in cui il vincolo "i rendimenti usano adj_close" entra
-        nel portafoglio senza toccare i prezzi di eseguito, che restano non aggiustati.
-        La cedola resta in cassa e viene reinvestita solo al ribilanciamento successivo,
-        quindi il rendimento e' piu' basso di quello implicito in adj_close, che assume
-        reinvestimento immediato allo stacco.
+        I prezzi in archivio sono grezzi, quindi allo split il prezzo scende e le azioni
+        devono salire, come fa il broker. Il rapporto si applica alla posizione com'era
+        alla chiusura precedente: gli eseguiti di oggi avvengono gia' nella scala nuova.
+        La frazione di azione che avanza viene monetizzata al prezzo di apertura.
+        """
+        for symbol in list(self.positions):
+            barra = self._barra_corrente(symbol, event)
+            if barra is None:
+                continue
+            fattore = _valore(barra, "split_factor", 1.0)
+            precedente = self._quantita_precedente(symbol, event)
+            if fattore == 1.0 or precedente == 0:
+                continue
+
+            esatto = precedente * fattore
+            intere = int(esatto)
+            residuo = esatto - intere
+            eseguiti_oggi = self.positions.get(symbol, 0) - precedente
+            self.positions[symbol] = intere + eseguiti_oggi
+            if residuo:
+                self.cash += residuo * _valore(barra, "open", _valore(barra, "close", 0.0))
+            logger.info(
+                "split_applicato",
+                symbol=symbol,
+                factor=fattore,
+                before=precedente,
+                after=self.positions[symbol],
+                residuo=round(residuo, 6),
+            )
+
+    def _credit_dividends(self, event: MarketEvent) -> None:
+        """Accredita in cassa la cedola staccata oggi, letta dalla colonna `dividends`.
+
+        La cedola e' per azione e nella stessa scala dei prezzi grezzi, quindi va
+        moltiplicata per le azioni possedute dopo l'eventuale split della giornata.
         """
         for symbol, quantity in self.positions.items():
             if quantity == 0:
                 continue
-            bars = self.data_handler.get_latest_bars(symbol, 2)
-            if len(bars) < 2 or bars.index[-1] != pd.Timestamp(event.timestamp):
+            barra = self._barra_corrente(symbol, event)
+            if barra is None:
                 continue
-            precedente = bars.iloc[-2]
-            corrente = bars.iloc[-1]
-            if precedente["adj_close"] <= 0.0 or precedente["close"] <= 0.0:
+            cedola = _valore(barra, "dividends", 0.0)
+            if cedola <= 0.0:
                 continue
-            atteso = precedente["close"] * (corrente["adj_close"] / precedente["adj_close"])
-            cedola = float(atteso - corrente["close"])
-            if cedola > EPS_DIVIDENDO * float(corrente["close"]):
-                self.cash += quantity * cedola
-                self.dividends_received += quantity * cedola
+            self.cash += quantity * cedola
+            self.dividends_received += quantity * cedola
+
+    def _segnala_posizioni_ferme(self, event: MarketEvent) -> None:
+        """Avvisa quando una posizione aperta smette di avere barre.
+
+        Un titolo che sparisce dai dati resta valorizzato all'ultimo prezzo noto, che
+        col passare dei giorni e' una finzione: meglio dirlo una volta per simbolo,
+        appena il ritardo supera la soglia, che scoprirlo dall'equity curve.
+        """
+        oggi = pd.Timestamp(event.timestamp)
+        for symbol, quantity in self.positions.items():
+            if quantity == 0:
+                self.stale_symbols.discard(symbol)
+                continue
+            barre = self.data_handler.get_latest_bars(symbol, 1)
+            ritardo = None if barre.empty else (oggi - barre.index[-1]).days
+            ferma = ritardo is None or ritardo > self.stale_after_days
+            if ferma and symbol not in self.stale_symbols:
+                self.stale_symbols.add(symbol)
+                logger.warning(
+                    "posizione_senza_barre",
+                    symbol=symbol,
+                    quantity=quantity,
+                    ultima_barra=None if barre.empty else str(barre.index[-1].date()),
+                    giorni_di_ritardo=ritardo,
+                )
+            elif not ferma:
+                self.stale_symbols.discard(symbol)
+
+    def _barra_corrente(self, symbol: str, event: MarketEvent) -> pd.Series | None:
+        """Barra del simbolo se scambia proprio oggi, None altrimenti."""
+        barre = self.data_handler.get_latest_bars(symbol, 1)
+        if barre.empty or barre.index[-1] != pd.Timestamp(event.timestamp):
+            return None
+        return barre.iloc[-1]
+
+    def _quantita_precedente(self, symbol: str, event: MarketEvent) -> int:
+        """Posizione come era alla chiusura precedente, al netto degli eseguiti di oggi."""
+        oggi = pd.Timestamp(event.timestamp)
+        variazione = 0
+        for fill in reversed(self.fills):
+            if pd.Timestamp(fill.timestamp) != oggi:
+                break
+            if fill.symbol == symbol:
+                variazione += fill.quantity if fill.direction is OrderDirection.BUY else -fill.quantity
+        return self.positions.get(symbol, 0) - variazione
 
     def last_price(self, symbol: str) -> float | None:
         """Ultimo close non aggiustato visibile per il simbolo, None se non c'e' ancora."""

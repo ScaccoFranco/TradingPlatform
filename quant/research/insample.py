@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from comune import COSTI, REPORT, SIMBOLI, confronto, momentum_factory, riepilogo_costi, salva_grafico, tabella
-
+from quant.research.common import (
+    CONFIG,
+    REPORT,
+    SIMBOLI,
+    confronto,
+    momentum_factory,
+    quiet_logging,
+    riepilogo_costi,
+    salva_grafico,
+    tabella,
+)
 from quant.validation import deflated_sharpe, parameter_combinations, parameter_sensitivity
 
 INIZIO = "2005-01-01"
@@ -24,6 +28,7 @@ GIORNI_ANNO = 252
 
 def main() -> None:
     """Esegue il confronto a tre, la griglia di sensitivita' e il Deflated Sharpe."""
+    quiet_logging()
     risultati = confronto(INIZIO, FINE)
     print(f"In-sample {INIZIO} -> {FINE}")
     print(tabella(risultati))
@@ -36,7 +41,7 @@ def main() -> None:
     print(f"\nStesso confronto da {INIZIO_RISCALDATO}, con il {INIZIO[:4]} usato solo come storico")
     print(tabella(riscaldati))
 
-    sensitivity = parameter_sensitivity(momentum_factory, GRIGLIA, SIMBOLI, INIZIO, FINE, **COSTI)
+    sensitivity = parameter_sensitivity(momentum_factory, GRIGLIA, SIMBOLI, INIZIO, FINE, config=CONFIG)
     REPORT.mkdir(parents=True, exist_ok=True)
     csv = REPORT / "sensitivity.csv"
     sensitivity.to_csv(csv, index=False)
@@ -47,8 +52,8 @@ def main() -> None:
         .to_string(index=False)
     )
     print(
-        "sharpe: min %.2f mediana %.2f max %.2f"
-        % (sensitivity["sharpe"].min(), sensitivity["sharpe"].median(), sensitivity["sharpe"].max())
+        f"sharpe: min {sensitivity['sharpe'].min():.2f} "
+        f"mediana {sensitivity['sharpe'].median():.2f} max {sensitivity['sharpe'].max():.2f}"
     )
 
     metriche = risultati["momentum"]["metrics"]

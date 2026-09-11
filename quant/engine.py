@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Protocol
+from typing import Any, Protocol
 
 from quant.data import DataHandler
 from quant.events import (
@@ -13,7 +13,10 @@ from quant.events import (
     OrderEvent,
     SignalEvent,
 )
+from quant.logging import get_logger
 from quant.strategy import Strategy
+
+logger = get_logger("engine")
 
 
 class PortfolioLike(Protocol):
@@ -29,7 +32,7 @@ class PortfolioLike(Protocol):
 class RiskManagerLike(Protocol):
     """Contratto minimo richiesto dal loop a un gestore del rischio."""
 
-    def filter(self, order: OrderEvent, portfolio: PortfolioLike) -> OrderEvent | None: ...
+    def filter(self, order: OrderEvent, portfolio: Any) -> OrderEvent | None: ...
 
 
 class ExecutionHandlerLike(Protocol):
@@ -66,7 +69,15 @@ class Backtest:
         """Cicla finche' ci sono barre: aggiorna i dati e svuota la coda a ogni passo."""
         while self.data_handler.continue_backtest:
             self.queue.extend(self.data_handler.update_bars())
+            prima = (self.signal_events, self.order_events, self.fill_events)
             self._drain()
+            logger.debug(
+                "barra_conclusa",
+                timestamp=str(self.data_handler.current_timestamp()),
+                signals=self.signal_events - prima[0],
+                orders=self.order_events - prima[1],
+                fills=self.fill_events - prima[2],
+            )
 
     def _drain(self) -> None:
         """Consuma la coda dispatchando ogni evento per tipo."""
@@ -120,5 +131,13 @@ class Backtest:
     def _on_fill(self, event: FillEvent) -> None:
         """Aggiorna il Portfolio con l'eseguito."""
         self.fill_events += 1
+        logger.info(
+            "fill",
+            timestamp=str(event.timestamp),
+            symbol=event.symbol,
+            direction=str(event.direction),
+            quantity=event.quantity,
+            fill_price=event.fill_price,
+        )
         if self.portfolio is not None:
             self.portfolio.on_fill(event)

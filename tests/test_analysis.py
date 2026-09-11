@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 from pytest import approx
 
-from quant.analysis import compare, compute_metrics, max_drawdown, to_series
+from quant.analysis import compare, compute_metrics, format_table, max_drawdown, to_series
 from quant.events import FillEvent, OrderDirection
 
 
@@ -19,7 +19,7 @@ def circa(valore: float, tolleranza: float = 1e-9) -> object:
 def curva(valori: list[float], inizio: str = "2020-01-01") -> list[tuple[datetime, float]]:
     """Equity curve su giorni lavorativi consecutivi."""
     date = pd.bdate_range(inizio, periods=len(valori))
-    return [(d.to_pydatetime(), v) for d, v in zip(date, valori)]
+    return [(d.to_pydatetime(), v) for d, v in zip(date, valori, strict=False)]
 
 
 def fill(commissione: float) -> FillEvent:
@@ -69,3 +69,58 @@ def test_compare_stampa_le_due_colonne(capsys) -> None:
     assert "momentum" in tabella and "SPY" in tabella
     assert "Sharpe (rf=0)" in tabella
     assert tabella in capsys.readouterr().out
+
+
+def rendimenti_di(curva: list[tuple[datetime, float]]) -> pd.Series:
+    """Rendimenti giornalieri di una equity curve, indicizzati per data."""
+    serie = to_series(curva)
+    return serie.pct_change().dropna()
+
+
+def test_sharpe_in_eccesso_nullo_se_il_tasso_uguaglia_la_strategia() -> None:
+    """Sottraendo alla strategia se stessa non resta nessuna sovraperformance."""
+    valori = [100.0, 101.0, 100.5, 103.0, 102.0, 105.0]
+    curva = curva_da(valori)
+    metriche = compute_metrics(curva, risk_free=rendimenti_di(curva))
+
+    assert metriche["sharpe"] == 0.0
+    assert metriche["sortino"] == 0.0
+    assert metriche["excess"] == 1.0
+    assert metriche["volatilita"] == compute_metrics(curva)["volatilita"]
+    assert metriche["cagr"] == compute_metrics(curva)["cagr"]
+
+
+def test_il_tasso_privo_di_rischio_abbassa_lo_sharpe() -> None:
+    curva = curva_da([100.0, 101.0, 100.5, 103.0, 102.0, 105.0])
+    lordo = compute_metrics(curva)
+    netto = compute_metrics(curva, risk_free=pd.Series(0.0005, index=to_series(curva).index))
+
+    assert netto["sharpe"] < lordo["sharpe"]
+    assert netto["max_drawdown"] == lordo["max_drawdown"]
+    assert netto["calmar"] == lordo["calmar"]
+
+
+def test_sortino_ignora_la_volatilita_al_rialzo() -> None:
+    """Due curve con la stessa media ma perdite diverse hanno Sortino diverso."""
+    regolare = compute_metrics(curva_da([100.0, 101.0, 102.0, 103.0, 104.0, 103.0]))
+    scossa = compute_metrics(curva_da([100.0, 96.0, 104.0, 99.0, 108.0, 103.0]))
+
+    assert regolare["sortino"] > scossa["sortino"]
+    assert regolare["sortino"] > regolare["sharpe"]
+
+
+def test_calmar_e_cagr_su_drawdown() -> None:
+    metriche = compute_metrics(curva_da([100.0, 110.0, 88.0, 99.0]))
+    assert metriche["calmar"] == circa(metriche["cagr"] / abs(metriche["max_drawdown"]))
+
+
+def test_etichetta_della_tabella_cambia_con_il_tasso() -> None:
+    curva = curva_da([100.0, 101.0, 102.0])
+    assert "Sharpe (rf=0)" in format_table({"a": compute_metrics(curva)})
+    tasso = pd.Series(0.0001, index=to_series(curva).index)
+    assert "Sharpe (excess)" in format_table({"a": compute_metrics(curva, risk_free=tasso)})
+
+
+def curva_da(valori: list[float]) -> list[tuple[datetime, float]]:
+    """Equity curve su giorni lavorativi consecutivi."""
+    return curva(valori)

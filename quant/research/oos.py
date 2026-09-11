@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import date
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from comune import REPORT, confronto, riepilogo_costi, salva_grafico, tabella
+from quant.research.common import REPORT, confronto, quiet_logging, riepilogo_costi, salva_grafico, tabella
 
 INIZIO = "2019-01-01"
 FINE = date.today().isoformat()
@@ -17,6 +13,7 @@ RISCALDAMENTO = "2017-01-01"  # solo storico: le metriche partono comunque dal 2
 
 def main() -> None:
     """Stesso confronto a tre dell'analisi in-sample, sul periodo mai usato in sviluppo."""
+    quiet_logging()
     risultati = confronto(INIZIO, FINE, warmup_start=RISCALDAMENTO)
     print(f"Out-of-sample {INIZIO} -> {FINE}, parametri di default, storico da {RISCALDAMENTO}")
     print(tabella(risultati))
