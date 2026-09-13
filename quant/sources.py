@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -14,6 +15,7 @@ import yfinance as yf
 
 from quant.config import ConfigError, Settings, load_settings
 
+SIMBOLO_VALIDO = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,14}$")
 PRICE_COLUMNS = ("open", "high", "low", "close", "volume")
 REQUIRED_COLUMNS = (*PRICE_COLUMNS, "dividend", "split")
 OPTIONAL_COLUMNS = ("adj_close",)
@@ -55,6 +57,17 @@ class DataSource(ABC):
     @abstractmethod
     def fetch(self, symbol: str, start: Giorno, end: Giorno | None = None) -> pd.DataFrame:
         """Barre del simbolo fra start ed end inclusi, nel formato del contratto."""
+
+
+def valida_simbolo(symbol: str) -> str:
+    """Ticker plausibile e innocuo: finisce in un nome di file e nel percorso di un URL.
+
+    Senza questo controllo un simbolo con `../` scriverebbe fuori da `data/parquet` e
+    cambierebbe l'endpoint chiamato sul fornitore.
+    """
+    if not SIMBOLO_VALIDO.match(symbol):
+        raise ValueError(f"simbolo non valido: {symbol!r}")
+    return symbol
 
 
 def empty_frame() -> pd.DataFrame:
@@ -118,6 +131,7 @@ class YFinanceSource(DataSource):
 
     def fetch(self, symbol: str, start: Giorno, end: Giorno | None = None) -> pd.DataFrame:
         """Scarica barre, cedole e split e le riporta ai prezzi grezzi."""
+        valida_simbolo(symbol)
         fine = None if end is None else (_giorno(end) + timedelta(days=1)).isoformat()  # yfinance esclude end
         raw = yf.download(
             symbol,
@@ -225,6 +239,7 @@ class TiingoSource(DataSource):
 
     def fetch(self, symbol: str, start: Giorno, end: Giorno | None = None) -> pd.DataFrame:
         """Barre daily grezze del simbolo, con cedole, split e `adj_close` del vendor."""
+        valida_simbolo(symbol)
         parametri = {"startDate": _giorno(start).isoformat()}
         if end is not None:
             parametri["endDate"] = _giorno(end).isoformat()

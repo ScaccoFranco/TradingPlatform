@@ -318,3 +318,12 @@ def test_sorgente_da_riga_di_comando(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(crea_sorgente("tiingo"), TiingoSource)
     with pytest.raises(ValueError, match="sconosciuta"):
         crea_sorgente("bloomberg")
+
+
+def test_simbolo_ostile_non_scrive_fuori_dalla_cartella(tmp_path: Path) -> None:
+    """Un simbolo con `../` uscirebbe da data/parquet: si ferma prima di toccare il disco."""
+    sorgente = SorgenteFinta({"SPY": barre_sorgente(GENNAIO)})
+    with pytest.raises(ValueError, match="simbolo non valido"):
+        scarica_in(tmp_path, sorgente, ["../../fuori"], oggi=FEBBRAIO)
+    assert not (tmp_path / "parquet").exists()
+    assert not (tmp_path.parent / "fuori.parquet").exists()

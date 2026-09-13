@@ -18,7 +18,7 @@ import pandas as pd
 
 from quant.download import NEW_YORK, OPTIONAL, OUTPUT_DIR, REPORT_DIR, SYMBOLS, scarica
 from quant.manifest import load_manifest, manifest_path, sha256_file
-from quant.sources import DataSource, DataSourceError, SchemaError
+from quant.sources import DataSource, DataSourceError, SchemaError, valida_simbolo
 
 COLONNE_GREZZE = ("open", "high", "low", "close", "volume", "dividends", "split_factor")
 CSV_COLUMNS = [
@@ -123,7 +123,7 @@ def run_check(
     registro = load_manifest(manifest_path(output_dir))
     parti: list[pd.DataFrame] = []
     risultato = DriftResult(pd.DataFrame(columns=CSV_COLUMNS), report_dir / f"data_drift_{giorno}.csv")
-    for symbol in symbols or SYMBOLS:
+    for symbol in [valida_simbolo(s) for s in symbols or SYMBOLS]:
         parquet = output_dir / f"{symbol}.parquet"
         if not parquet.exists():
             print(f"{symbol}: nessun Parquet da verificare")

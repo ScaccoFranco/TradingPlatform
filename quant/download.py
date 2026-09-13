@@ -42,6 +42,7 @@ from quant.sources import (
     SchemaError,
     TiingoSource,
     YFinanceSource,
+    valida_simbolo,
     validate_schema,
 )
 
@@ -277,7 +278,7 @@ def run_download(
     print(f"sorgente: {source.name}")
     esiti: dict[str, SymbolOutcome] = {}
     candidati: dict[str, Candidate] = {}
-    for symbol in symbols or SYMBOLS:
+    for symbol in [valida_simbolo(s) for s in symbols or SYMBOLS]:
         esito = esiti[symbol] = SymbolOutcome(symbol, optional=symbol in OPTIONAL)
         try:
             candidati[symbol] = prepara(symbol, source, output_dir, start, update, giorno, registro)

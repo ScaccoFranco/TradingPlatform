@@ -16,6 +16,7 @@ from quant.sources import (
     TiingoSource,
     YFinanceSource,
     empty_frame,
+    valida_simbolo,
     validate_schema,
 )
 
@@ -267,3 +268,18 @@ def test_la_chiave_non_finisce_nei_messaggi_di_errore() -> None:
     with pytest.raises(DataSourceError) as errore:
         sorgente.fetch("SPY", "2018-03-01")
     assert "chiave-segreta" not in str(errore.value)
+
+
+CATTIVI = ["../../fuori", "spy/../fundamentals", "SPY/prices", "..", "", "SPY\\x", "A" * 16, ".SPY"]
+
+
+@pytest.mark.parametrize("simbolo", CATTIVI)
+def test_simboli_ostili_rifiutati(simbolo: str) -> None:
+    """Il simbolo entra in un nome di file e nel percorso di un URL: niente separatori."""
+    with pytest.raises(ValueError, match="simbolo non valido"):
+        valida_simbolo(simbolo)
+
+
+@pytest.mark.parametrize("simbolo", ["SPY", "BRK.B", "BF-B", "spy", "IWM", "X"])
+def test_simboli_veri_accettati(simbolo: str) -> None:
+    assert valida_simbolo(simbolo) == simbolo
