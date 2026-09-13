@@ -242,3 +242,25 @@ def test_il_live_scrive_json_che_il_report_sa_rileggere(tmp_path: Path) -> None:
     eventi = read_events(percorso)
     assert [e["event"] for e in eventi] == ["ordine_rifiutato", "RECONCILIATION_MISMATCH"]
     assert risk_decisions(eventi)[0]["reason"] == "KILL_SWITCH"
+
+
+
+def test_provenienza_dello_shadow_in_coda(store: StateStore, dati: Path, tmp_path: Path) -> None:
+    """Il report finisce con la provenienza dello shadow, o dice che non c'e'."""
+    from quant.config import BacktestConfig
+    from quant.provenance import build_provenance
+    from quant.strategy import BuyAndHoldStrategy
+
+    equity = [CAPITALE * (1 + 0.001 * i) for i in range(5)]
+    popola_store(store, equity, prezzo_fill=100.05)
+    opzioni = {"riferimento": VENERDI, "data_path": dati, "log_path": tmp_path / "assente.jsonl"}
+    senza = build_weekly_report(store, ombra(equity), directory=tmp_path / "a", **opzioni)
+    assert "## Provenienza dello shadow\n\nNon disponibile" in senza.markdown
+
+    shadow = ombra(equity)
+    strategia = BuyAndHoldStrategy(None, "SPY")
+    shadow.provenance = build_provenance(BacktestConfig(path=dati), ["SPY"], None, None, None, strategia)
+    con = build_weekly_report(store, shadow, directory=tmp_path / "b", **opzioni)
+    coda = con.markdown[con.markdown.index("## Provenienza dello shadow") :]
+    assert shadow.provenance.hash in coda
+    assert con.markdown.rstrip().splitlines()[-1].startswith("- Config:")

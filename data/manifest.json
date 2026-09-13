@@ -1,0 +1,117 @@
+{
+  "symbols": {
+    "BIL": {
+      "bars": 4853,
+      "downloaded_at": "2026-09-13",
+      "first": "2007-05-30",
+      "last": "2026-09-11",
+      "sha256": "dc37e8e2ba58f55f18af009880f84ae31156cc4421b1bbb5417014ebe001f8db",
+      "source": "tiingo"
+    },
+    "DBC": {
+      "bars": 5183,
+      "downloaded_at": "2026-09-13",
+      "first": "2006-02-03",
+      "last": "2026-09-11",
+      "sha256": "b1eb9ef1c3cf95fb90d34f8757484101838a3577c9cc857fa4d0f7ac838caf85",
+      "source": "tiingo"
+    },
+    "EEM": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "d23d4723272f7d20abc0a99d0f95599d017fd0c101c314c8d9743f08cd4c0ebe",
+      "source": "tiingo"
+    },
+    "EFA": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "b14c4c8544adfcbc564d640deee270b2d82becd372fe35df563ea1c7d6e7819c",
+      "source": "tiingo"
+    },
+    "GLD": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "a349d5114f3ebccb969389e89279f499969669749ef6322ce5f2cda9607f95a3",
+      "source": "tiingo"
+    },
+    "HYG": {
+      "bars": 4887,
+      "downloaded_at": "2026-09-13",
+      "first": "2007-04-11",
+      "last": "2026-09-11",
+      "sha256": "2476d2364362197f9b5a0837fd09acffbfc483b55f399595aaf0fc19758f50fb",
+      "source": "tiingo"
+    },
+    "IEF": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "cea74a86a8afd9b89b6619f6aefe99f863b65d15a9eeb7fb40e79e750447631f",
+      "source": "tiingo"
+    },
+    "IWM": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "7c7869c12a977d65d6cbc7aeecd80459a81baca4a865f95fc942613c4384d92d",
+      "source": "tiingo"
+    },
+    "LQD": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "c535bb5819d7b158063643c7a34e099f555f4c00304509ba88d342e56dd792c3",
+      "source": "tiingo"
+    },
+    "QQQ": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "718d445ba2d07cf9b6bc5371d6fade4028ac73d1cfbe57fd81f93d61a9581dee",
+      "source": "tiingo"
+    },
+    "SHY": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "c743c49cb367997d4beea1602def3343bf52a59ba944cbfe2cb8c308762dd350",
+      "source": "tiingo"
+    },
+    "SPY": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "d1c776da95d78095450157f219ba876248fd2414ec55f999ef334faef528c07d",
+      "source": "tiingo"
+    },
+    "TLT": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "3a631ad88777f15488dd7b401e7d62ecb2b92b1053c3346bf97182ff26a3c002",
+      "source": "tiingo"
+    },
+    "VNQ": {
+      "bars": 5457,
+      "downloaded_at": "2026-09-13",
+      "first": "2005-01-03",
+      "last": "2026-09-11",
+      "sha256": "2eaa9d04e42b7c484ecba42f1cc727b04f75ceb80295f152e14074e2598b8624",
+      "source": "tiingo"
+    }
+  },
+  "version": 1
+}

@@ -161,20 +161,21 @@ class Portfolio:
     def _credit_dividends(self, event: MarketEvent) -> None:
         """Accredita in cassa la cedola staccata oggi, letta dalla colonna `dividends`.
 
-        La cedola e' per azione e nella stessa scala dei prezzi grezzi, quindi va
-        moltiplicata per le azioni possedute dopo l'eventuale split della giornata.
+        Ne ha diritto chi aveva le azioni alla chiusura precedente la data ex: un acquisto
+        eseguito all'apertura di oggi paga gia' il prezzo senza cedola, una vendita di oggi
+        la incassa ancora. La cedola e' per azione e nella scala dei prezzi grezzi del
+        giorno, quindi vale per le azioni dopo l'eventuale split della giornata.
         """
-        for symbol, quantity in self.positions.items():
-            if quantity == 0:
-                continue
+        for symbol in self.positions:
             barra = self._barra_corrente(symbol, event)
             if barra is None:
                 continue
             cedola = _valore(barra, "dividends", 0.0)
             if cedola <= 0.0:
                 continue
-            self.cash += quantity * cedola
-            self.dividends_received += quantity * cedola
+            aventi_diritto = self._quantita_precedente(symbol, event)
+            self.cash += aventi_diritto * cedola
+            self.dividends_received += aventi_diritto * cedola
 
     def _segnala_posizioni_ferme(self, event: MarketEvent) -> None:
         """Avvisa quando una posizione aperta smette di avere barre.

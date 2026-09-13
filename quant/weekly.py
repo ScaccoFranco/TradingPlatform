@@ -118,11 +118,7 @@ def giorni_di_borsa(inizio: date, fine: date, path: str | Path = PERCORSO_DATI) 
     """Giornate di borsa nel periodo, prese dal calendario del benchmark."""
     serie = benchmark_series(path)
     if serie.empty:
-        return [
-            g
-            for g in pd.date_range(inizio, fine).date
-            if g.weekday() < 5
-        ]
+        return [g for g in pd.date_range(inizio, fine).date if g.weekday() < 5]
     finestra = serie.loc[str(inizio) : str(fine)]
     return [d.date() for d in finestra.index]
 
@@ -333,6 +329,14 @@ def _componi(**dati: Any) -> str:
     if dati["saltati"]:
         parti.append(f"  - {_elenco(dati['saltati'])}")
     parti.append("")
+
+    provenienza = dati["shadow"].provenance
+    if provenienza is not None:
+        parti.append(provenienza.to_markdown(title="## Provenienza dello shadow"))
+    else:
+        parti.append(
+            "## Provenienza dello shadow\n\nNon disponibile: lo shadow non viene da `run_backtest`.\n"
+        )
     return "\n".join(parti)
 
 

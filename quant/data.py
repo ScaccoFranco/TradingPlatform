@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -138,7 +139,9 @@ class ParquetDataHandler(FrameDataHandler):
         symbols: list[str],
         start: str | datetime | None = None,
         end: str | datetime | None = None,
+        transform: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
     ) -> None:
+        """`transform` si applica a ogni simbolo dopo il taglio sulla finestra, prima del cursore."""
         data: dict[str, pd.DataFrame] = {}
         for symbol in symbols:
             frame = pd.read_parquet(Path(path) / f"{symbol}.parquet")
@@ -146,5 +149,5 @@ class ParquetDataHandler(FrameDataHandler):
                 frame = frame[frame.index >= pd.Timestamp(start)]
             if end is not None:
                 frame = frame[frame.index <= pd.Timestamp(end)]
-            data[symbol] = frame
+            data[symbol] = frame if transform is None else transform(frame)
         super().__init__(data)

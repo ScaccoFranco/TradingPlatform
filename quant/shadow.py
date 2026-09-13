@@ -13,6 +13,7 @@ import pandas as pd
 from quant.config import PERCORSO_DATI, BacktestConfig
 from quant.events import FillEvent
 from quant.logging import get_logger
+from quant.provenance import Provenance
 from quant.strategy import Strategy
 from quant.validation import run_backtest
 
@@ -33,6 +34,7 @@ class ShadowResult:
     equity_curve: list[tuple[datetime, float]] = field(default_factory=list)
     fills: list[FillEvent] = field(default_factory=list)
     metrics: dict[str, float] = field(default_factory=dict)
+    provenance: Provenance | None = None
 
     def equity_series(self) -> pd.Series:
         """Equity teorica come serie indicizzata per data."""
@@ -93,6 +95,7 @@ class ShadowBacktest:
             equity_curve=list(risultato["equity_curve"]),
             fills=list(risultato["fills"]),
             metrics=dict(risultato["metrics"]),
+            provenance=risultato["provenance"],
         )
         logger.info(
             "shadow_eseguito",

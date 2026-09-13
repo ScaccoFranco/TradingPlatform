@@ -12,6 +12,7 @@ dependencies = [
     "apscheduler",
     "pydantic-settings",
     "structlog",
+    "requests",
 ]
 
 [dependency-groups]
@@ -47,5 +48,5 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["yfinance.*", "alpaca.*", "apscheduler.*", "matplotlib.*", "structlog.*", "pandas.*"]
+module = ["yfinance.*", "alpaca.*", "apscheduler.*", "matplotlib.*", "structlog.*", "pandas.*", "requests.*"]
 ignore_missing_imports = true

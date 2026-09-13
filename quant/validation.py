@@ -14,15 +14,20 @@ from typing import Any, TypedDict
 
 import pandas as pd
 
+from quant.adjust import adjusted_view
 from quant.analysis import compute_metrics
 from quant.config import BacktestConfig
 from quant.data import DataHandler, ParquetDataHandler
 from quant.engine import Backtest
 from quant.events import FillEvent
 from quant.execution import SimulatedExecutionHandler
+from quant.logging import get_logger
 from quant.portfolio import Portfolio
+from quant.provenance import Provenance, build_provenance
 from quant.risk import RiskManager
 from quant.strategy import Strategy
+
+logger = get_logger("validation")
 
 PERCORSO_DATI = Path("data/parquet")
 GAMMA = 0.5772156649015329  # costante di Eulero-Mascheroni
@@ -41,6 +46,7 @@ class BacktestResult(TypedDict):
     portfolio: Portfolio
     backtest: Backtest
     config: BacktestConfig
+    provenance: Provenance
 type DataHandlerFactory = Callable[..., DataHandler]
 
 
@@ -52,6 +58,16 @@ def build_data_handler(
 ) -> DataHandler:
     """Costruttore predefinito del data handler per una finestra temporale."""
     return ParquetDataHandler(path, list(symbols), start=start, end=end)
+
+
+def build_adjusted_data_handler(
+    path: str | Path,
+    symbols: Sequence[str],
+    start: str | datetime | None,
+    end: str | datetime | None,
+) -> DataHandler:
+    """Data handler sulle barre rettificate, per `BacktestConfig(dividends_as_cash=False)`."""
+    return ParquetDataHandler(path, list(symbols), start=start, end=end, transform=adjusted_view)
 
 
 def run_backtest(
@@ -75,16 +91,24 @@ def run_backtest(
     anno in cassa per mancanza di storico, e il confronto con i benchmark sarebbe falsato.
 
     I parametri stanno in `BacktestConfig`. I vecchi argomenti sciolti restano accettati
-    per una release, con un avviso di deprecazione.
+    per una release, con un avviso di deprecazione. Il blocco `provenance` lega il
+    risultato a dati, commit e parametri, ed e' raccolto prima di far girare la strategia.
     """
     impostazioni = _config_effettiva(config, legacy)
+    if not impostazioni.dividends_as_cash:
+        if data_handler_factory is not build_data_handler:
+            raise ValueError("dividends_as_cash=False funziona solo con il data handler Parquet predefinito")
+        data_handler_factory = build_adjusted_data_handler
     data_handler = data_handler_factory(impostazioni.path, symbols, warmup_start or start, end)
     strategy = _costruisci_strategia(strategy_factory, data_handler)
+    provenienza = build_provenance(impostazioni, symbols, start, end, warmup_start, strategy)
+    if provenienza.manifest_mismatch:
+        logger.warning("dati_fuori_manifest", symbols=list(provenienza.manifest_mismatch))
     portfolio = Portfolio(
         data_handler,
         initial_cash=impostazioni.initial_cash,
         cash_buffer=impostazioni.cash_buffer,
-        credit_dividends=impostazioni.credit_dividends,
+        credit_dividends=impostazioni.dividends_as_cash,
     )
     backtest = Backtest(
         data_handler=data_handler,
@@ -118,6 +142,7 @@ def run_backtest(
         "portfolio": portfolio,
         "backtest": backtest,
         "config": impostazioni,
+        "provenance": provenienza,
     }
 
 
@@ -182,7 +207,7 @@ def parameter_sensitivity(
         risultato = run_backtest(
             strategy_factory_from_params(params), symbols, start, end, config=config, **engine_kwargs
         )
-        righe.append({**params, **risultato["metrics"]})
+        righe.append({**params, **risultato["metrics"], "provenance": risultato["provenance"].hash})
     return pd.DataFrame(righe)
 
 
@@ -269,6 +294,7 @@ def walk_forward(
                 "cagr_oos": metriche_oos["cagr"],
                 "max_drawdown_oos": metriche_oos["max_drawdown"],
                 "n_trade_oos": metriche_oos["n_trade"],
+                "provenance_oos": risultato_oos["provenance"].hash,
             }
         )
 

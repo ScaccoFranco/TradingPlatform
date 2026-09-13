@@ -760,6 +760,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
+    { name = "requests" },
     { name = "structlog" },
     { name = "yfinance" },
 ]
@@ -780,6 +781,7 @@ requires-dist = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
+    { name = "requests" },
     { name = "structlog" },
     { name = "yfinance" },
 ]

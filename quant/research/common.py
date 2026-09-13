@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from quant.analysis import format_table, to_series
 from quant.config import PERCORSO_DATI, BacktestConfig
 from quant.logging import configure
+from quant.provenance import provenance_markdown
 from quant.strategies.fixed_weights import FixedWeightsStrategy
 from quant.strategies.momentum import CrossSectionalMomentum
 from quant.strategy import Strategy
@@ -32,12 +33,44 @@ CONFIG = BacktestConfig(
     commission_per_trade=1.0,
     slippage_bps=5.0,
     cash_buffer=0.01,
-    credit_dividends=True,
+    dividends_as_cash=True,
     max_weight_per_symbol=1.0,  # non deve vincolare: un tetto piu' basso azzoppa i benchmark
     risk_free_symbol=CASH,
     path=PERCORSO_DATI,
 )
 PESI_60_40 = {"SPY": 0.6, "IEF": 0.4}
+
+
+class Resoconto:
+    """Testo di uno script di ricerca: stampato a video e salvato in `reports/` con la provenienza in coda."""
+
+    def __init__(self, nome: str) -> None:
+        self.nome = nome
+        self.righe: list[str] = []
+        self.backtest: dict[str, BacktestResult] = {}
+
+    def scrivi(self, testo: object = "") -> None:
+        """Stampa e conserva una riga del resoconto."""
+        print(testo)
+        self.righe.append(str(testo))
+
+    def tabella(self, testo: str) -> None:
+        """Una tabella a larghezza fissa, dentro un blocco di codice nel markdown."""
+        print(testo)
+        self.righe.extend(["```", testo, "```"])
+
+    def registra(self, risultati: dict[str, BacktestResult], prefisso: str = "") -> None:
+        """Backtest di cui riportare la provenienza in coda."""
+        self.backtest.update({f"{prefisso}{nome}": r for nome, r in risultati.items()})
+
+    def salva(self, cartella: Path = REPORT) -> Path:
+        """Scrive `reports/<nome>.md`: testo e, in coda, la provenienza di ogni backtest."""
+        cartella.mkdir(parents=True, exist_ok=True)
+        destinazione = cartella / f"{self.nome}.md"
+        corpo = "\n".join(self.righe)
+        destinazione.write_text(f"{corpo}\n\n{provenance_markdown(self.backtest)}", encoding="utf-8")
+        print(f"resoconto salvato in {destinazione}")
+        return destinazione
 
 
 def quiet_logging() -> None:

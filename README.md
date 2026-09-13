@@ -5,7 +5,11 @@ classi girano in backtest e in paper trading. Architettura e scelte in `CLAUDE.m
 
 ## Setup e dati
     uv sync
-    uv run python scripts/download.py [--update] [SIMBOLI]  # default: universo dal 2005
+    uv run python scripts/download.py [--update] [SIMBOLI]  # default: universo dal 2005, da Tiingo
+    uv run python scripts/download.py --check               # deriva retroattiva, guida in docs/data.md
+
+Serve `TIINGO_API_KEY` in `.env`, vedi `.env.example`. I Parquet non sono versionati,
+`data/manifest.json` si': va committato dopo ogni download.
 
 ## Ricerca e qualita'
     uv run python -m quant.research.insample     # 2005-2018, grafico e sensitivity
@@ -17,4 +21,4 @@ classi girano in backtest e in paper trading. Architettura e scelte in `CLAUDE.m
     uv run python scripts/status.py              # posizioni, equity, ultimi ordini
     uv run python scripts/weekly_report.py       # live contro shadow, docs/operations.md
 
-## Moduli: events, data, download, strategy, portfolio, risk, execution, engine, analysis, validation, config, logging, research/, live/, brokers/
+## Moduli: events, data, sources, download, data_quality, adjust, manifest, provenance, drift, strategy, portfolio, risk, execution, engine, analysis, validation, config, logging, research/, live/, brokers/

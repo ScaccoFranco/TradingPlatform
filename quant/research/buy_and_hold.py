@@ -1,4 +1,4 @@
-"""Esempio minimo: buy-and-hold su SPY con costi, prezzo secco contro cedole incassate."""
+"""Esempio minimo: buy-and-hold su SPY con costi, cedole in cassa contro prezzi rettificati."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from quant.analysis import compute_metrics, format_table
 from quant.config import PERCORSO_DATI, BacktestConfig
+from quant.provenance import provenance_markdown
 from quant.research.common import quiet_logging
 from quant.strategy import BuyAndHoldStrategy
 from quant.validation import run_backtest
@@ -23,28 +24,30 @@ def controlla_dati(config: BacktestConfig = CONFIG, symbol: str = SIMBOLO) -> No
 
 
 def main() -> None:
-    """Confronta il solo rendimento di prezzo con quello che include le cedole."""
+    """Confronta le due contabilita' del total return: devono dare quasi la stessa equity."""
     quiet_logging()
     controlla_dati()
     risultati = {
-        "solo prezzo": run_backtest(
+        "cedole in cassa": run_backtest(
             lambda: BuyAndHoldStrategy(None, SIMBOLO),
             [SIMBOLO],
             INIZIO,
-            config=CONFIG.with_overrides(credit_dividends=False, risk_free_symbol=None),
+            config=CONFIG.with_overrides(dividends_as_cash=True, risk_free_symbol=None),
         ),
-        "con cedole": run_backtest(
+        "prezzi rettificati": run_backtest(
             lambda: BuyAndHoldStrategy(None, SIMBOLO),
             [SIMBOLO],
             INIZIO,
-            config=CONFIG.with_overrides(credit_dividends=True, risk_free_symbol=None),
+            config=CONFIG.with_overrides(dividends_as_cash=False, risk_free_symbol=None),
         ),
     }
-    equity = risultati["solo prezzo"]["equity_curve"]
+    equity = risultati["cedole in cassa"]["equity_curve"]
     print(f"{SIMBOLO} buy-and-hold da {equity[0][0].date()} a {equity[-1][0].date()}, {len(equity)} barre")
     metriche = {nome: compute_metrics(r["equity_curve"], r["fills"]) for nome, r in risultati.items()}
     print(format_table(metriche))
-    print(f"cedole incassate: {risultati['con cedole']['portfolio'].dividends_received:,.0f}")
+    print(f"cedole incassate: {risultati['cedole in cassa']['portfolio'].dividends_received:,.0f}")
+    print()
+    print(provenance_markdown(risultati))
 
 
 if __name__ == "__main__":

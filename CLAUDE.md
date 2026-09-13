@@ -6,10 +6,13 @@ strutturale, non un controllo a posteriori: lo stesso codice deve poter girare i
 ## Comandi
 
     uv sync                                            # ambiente, Python 3.12
-    uv run python scripts/download.py [SIMBOLI]        # storico completo in data/parquet/
+    uv run python scripts/download.py [SIMBOLI]        # storico completo da Tiingo in data/parquet/
     uv run python scripts/download.py --update         # solo le barre nuove
+    uv run python scripts/download.py --check          # riscarica e confronta, senza scrivere
+    uv run python scripts/download.py --source yfinance SPY   # secondo fornitore, per confronto
     uv run python -m quant.research.buy_and_hold       # esempio minimo
     uv run python -m quant.research.insample           # 2005-2018, grafico e sensitivity
+    uv run python -m quant.research.dividend_accounting  # le due contabilita' delle cedole
     uv run python -m quant.research.oos                # 2019-oggi, parametri di default
     uv run python scripts/live.py                      # scheduler del paper trading
     uv run python scripts/status.py                    # posizioni, equity, ultimi ordini
@@ -31,7 +34,13 @@ sul close, poi la strategia.
 |---|---|
 | `quant/events.py` | Quattro dataclass frozen, nessuna logica |
 | `quant/data.py` | Cursore sull'indice temporale unificato, barre visibili |
-| `quant/download.py` | Download da yfinance, prezzi grezzi, aggiornamento incrementale |
+| `quant/sources.py` | `DataSource` ABC, Tiingo e yfinance, contratto delle barre in ingresso |
+| `quant/download.py` | Orchestrazione: scarica, controlla, scrive in modo atomico, aggiorna il manifest |
+| `quant/data_quality.py` | Controlli in ingresso, severita' dei finding, calendario di borsa |
+| `quant/adjust.py` | `adj_close` e `adj_volume` dai grezzi: l'unico posto che li produce |
+| `quant/manifest.py` | `data/manifest.json`: sorgente, intervallo, barre e SHA-256 per simbolo |
+| `quant/provenance.py` | Impronta di un backtest: dati, commit, config, finestra, strategia |
+| `quant/drift.py` | `--check`: differenze retroattive fra fornitore e Parquet salvati |
 | `quant/strategy.py` | Strategy ABC e strategie di base |
 | `quant/strategies/` | Momentum cross-sectional e benchmark a pesi fissi |
 | `quant/portfolio.py` | Unico componente che conosce il capitale |
@@ -58,6 +67,10 @@ sul close, poi la strategia.
 4. La strategia emette intenzioni, cioe' direzione e forza in [0, 1], mai quantita'.
 5. Ogni OrderEvent passa dal RiskManager prima dell'ExecutionHandler.
 6. Commissioni e slippage sono parametri del costruttore, mai costanti nel codice.
+7. L'`adj_close` si calcola in casa, in `quant/adjust.py`, mai si prende dal fornitore:
+   quello del vendor si scarica solo per confrontarlo nei controlli di qualita'.
+8. Nessuna barra entra nei Parquet senza passare dai controlli di `quant/data_quality.py`,
+   e un `BLOCKING` lascia sul disco la versione precedente.
 
 ## Scelte di progetto da conoscere
 
@@ -68,15 +81,20 @@ sul close, poi la strategia.
 - **Prezzi grezzi, operazioni sul capitale esplicite.** I Parquet contengono prezzi non
   rettificati per gli split, piu' le colonne `dividends` e `split_factor`. E' la stessa
   convenzione del feed del broker: allo split il prezzo scende e le azioni aumentano.
-  `quant/download.py` ricostruisce la scala grezza moltiplicando le barre per gli split
-  successivi; `adj_close` resta la serie rettificata che usano i segnali. `--update`
-  accoda le barre nuove e riscarica l'ultima gia' salvata, che poteva essere parziale se
-  presa a mercato aperto. Se fra le barre nuove c'e' una cedola o uno split riscarica
-  tutta la storia, perche' yfinance ricalcola `adj_close` all'indietro.
+  Tiingo consegna i grezzi cosi' come sono; `YFinanceSource` smonta la scala gia'
+  rettificata moltiplicando le barre per gli split successivi. `--update` accoda solo le
+  barre nuove e non riscrive mai quelle salvate, nemmeno dopo una cedola, perche'
+  `adj_close` si ricalcola in casa su tutta la storia. La seduta di oggi resta fuori
+  finche' non e' chiusa: a mercato aperto il close e' provvisorio e nessuno lo
+  correggerebbe piu'.
 - **Cedole e split.** `Portfolio.on_market` applica prima lo split della barra, con la
   frazione residua monetizzata all'apertura, poi accredita `dividends` per azione in
   cassa, e solo alla fine valorizza. Lo split vale sempre, le cedole solo con
-  `credit_dividends=True`. Restano liquide fino al ribilanciamento successivo.
+  `dividends_as_cash=True`, il default e l'unica contabilita' possibile in live: ne ha
+  diritto chi aveva le azioni alla chiusura precedente la data ex, non chi compra quel
+  giorno. Restano liquide fino al ribilanciamento successivo. Con `dividends_as_cash=False`
+  le barre passano da `adjusted_view` e il total return sta tutto nel prezzo, utile come
+  controprova: sull'in-sample le due contabilita' distano meno dello 0,2%.
   L'esecuzione riscala gli ordini pendenti che attraversano uno split.
 - **Cassa.** Il dimensionamento usa il close di oggi ma il fill avviene all'open di
   domani: `cash_buffer` protegge dai gap al rialzo, con zero la cassa puo' andare
@@ -104,8 +122,8 @@ sul close, poi la strategia.
 
 ## Convenzioni
 
-Python 3.12. Dipendenze runtime: pandas, pyarrow, yfinance, matplotlib, structlog, piu'
-alpaca-py, apscheduler e pydantic-settings per il live. Nessun framework di backtesting
+Python 3.12. Dipendenze runtime: pandas, pyarrow, yfinance, requests, matplotlib, structlog,
+piu' alpaca-py, apscheduler e pydantic-settings per il live. Nessun framework di backtesting
 esterno. Type hints ovunque, dataclass frozen per gli eventi, ABC per le interfacce.
 Docstring brevi in italiano, niente commenti superflui. I parametri di un backtest passano
 da `BacktestConfig`: gli argomenti sciolti di `run_backtest` sono deprecati. Il pacchetto
@@ -113,6 +131,30 @@ e' installato in modalita' editabile, quindi nessun modulo manipola `sys.path`.
 I test non toccano la rete: usano Parquet sintetici costruiti nelle fixture. I dati dal
 2019-01-01 in poi sono riservati alla validazione out-of-sample e non vanno usati nei test
 ne' negli script di sviluppo.
+
+## Dati di qualita' produzione (Fase 5)
+
+Il fornitore predefinito e' Tiingo, chiave in `TIINGO_API_KEY`; yfinance resta come secondo
+parere con `--source yfinance`. Guida completa in `docs/data.md`.
+
+- **Contratto unico in ingresso.** `DataSource.fetch` restituisce prezzi grezzi piu'
+  `dividend` e `split`, verificati da `validate_schema`. Cambiare fornitore vuol dire
+  scrivere una sottoclasse, non toccare il download.
+- **Controlli prima della scrittura.** Il download scarica tutti i simboli, costruisce il
+  calendario, controlla e solo allora scrive: un `BLOCKING` non lascia Parquet parziali, il
+  report `reports/data_quality_AAAA-MM-GG.md` si scrive comunque, e con un blocco si esce
+  con codice diverso da zero e parte l'alert Telegram.
+- **Calendario di borsa.** Quello Alpaca, lo stesso del live; senza chiavi o senza rete si
+  ripiega sull'unione delle date dei simboli scaricati, e il report lo dichiara.
+- **Manifest come guardia.** `data/manifest.json` e' versionato in git e va committato dopo
+  ogni download. `--update` si rifiuta di accodare se la voce manca, se il fornitore
+  registrato e' un altro o se il Parquet non corrisponde piu' al suo hash.
+- **Provenienza.** `run_backtest` restituisce l'impronta di dati, commit, config e
+  strategia, e i report la stampano in coda. Dice se due risultati sono confrontabili, non
+  li rende tali.
+- **La deriva si segnala, non si corregge.** `--check` riscarica e confronta i soli valori
+  grezzi, senza scrivere: le differenze vanno in `reports/data_drift_AAAA-MM-GG.csv` con lo
+  SHA-256 del Parquet, per risalire ai backtest che quelle barre le hanno gia' usate.
 
 ## Live (Fase 3)
 
@@ -166,7 +208,7 @@ Durante i test il log applicativo e' a WARNING, impostato in `tests/conftest.py`
 
 ## Stato
 
-Fasi 1, 2, 2.5, 3 e 4 complete. Gli script di ricerca stanno in `quant/research/`, gli
+Fasi 1, 2, 2.5, 3, 4 e 5 complete. Gli script di ricerca stanno in `quant/research/`, gli
 output in `reports/`, che non e' versionato. Il confronto usa benchmark ribilanciati
 mensilmente: senza ribilanciamento le cedole resterebbero ferme in cassa e il paragone
 favorirebbe la strategia attiva.

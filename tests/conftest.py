@@ -12,7 +12,24 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from quant.config import Settings
+
 SYMBOLS = ["SPY", "QQQ", "TLT", "GLD"]
+PREFISSI_SEGRETI = ("ALPACA_", "TELEGRAM_", "TIINGO_")
+
+
+@pytest.fixture(autouse=True)
+def ambiente_senza_segreti(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isola i test dal `.env` di sviluppo e dalle chiavi nell'ambiente.
+
+    Senza questo, l'esito dipende da cosa ha configurato chi esegue i test, e una
+    asserzione fallita stampa le chiavi vere nel log. Chi ha bisogno di una chiave se la
+    imposta da se' con `monkeypatch.setenv`.
+    """
+    monkeypatch.setattr(Settings, "model_config", {**Settings.model_config, "env_file": None})
+    for nome in list(os.environ):
+        if nome.startswith(PREFISSI_SEGRETI):
+            monkeypatch.delenv(nome, raising=False)
 
 
 def make_frame(dates: pd.DatetimeIndex, base: float) -> pd.DataFrame:
