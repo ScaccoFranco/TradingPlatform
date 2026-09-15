@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block titolo %}Report{% endblock %}
+{% block contenuto %}
+<h1>Report</h1>
+<p class="sottotitolo">
+  File in {{ cartella }}, dal piu' recente. Markdown, CSV e testo si aprono come testo, i PNG come immagini;
+  gli altri formati si elencano soltanto.
+</p>
+
+{% if not report.disponibile %}
+<p class="vuoto">{{ report.nota }}</p>
+{% elif not report.righe %}
+<p class="vuoto">Nessun file in {{ cartella }}.</p>
+{% else %}
+<div class="scorrevole">
+  <table>
+    <thead><tr><th>File</th><th>Tipo</th><th>Modificato</th><th class="num">Dimensione</th></tr></thead>
+    <tbody>
+      {% for file in report.righe %}
+      <tr>
+        <td class="codice">{% if file.tipo != "altro" %}<a href="/report/{{ file.nome | urlencode }}">{{ file.nome }}</a>{% else %}{{ file.nome }}{% endif %}</td>
+        <td>{{ file.tipo }}</td>
+        <td>{{ file.modificato | momento_borsa }}</td>
+        <td class="num">{{ file.dimensione | dimensione }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

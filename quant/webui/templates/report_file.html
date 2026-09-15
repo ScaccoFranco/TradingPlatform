@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block titolo %}{{ nome }}{% endblock %}
+{% block contenuto %}
+<p><a href="/report">&larr; Tutti i report</a></p>
+<h1 class="titolo-file">{{ nome }}</h1>
+{% if troncato %}
+<p class="vuoto">File piu' grande di {{ massimo | dimensione }}: e' mostrata solo la parte iniziale.</p>
+{% endif %}
+{% if immagine %}
+<figure class="grafico"><img src="/report/{{ immagine | urlencode }}" alt="Grafico che accompagna {{ nome }}"></figure>
+{% endif %}
+<pre class="testo-report">{{ testo }}</pre>
+{% endblock %}

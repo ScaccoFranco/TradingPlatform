@@ -16,6 +16,8 @@ from quant.reconcile_report import (
     FillRecord,
     compare,
     live_equity_series,
+    live_exposure_series,
+    real_fill_events,
     real_fills,
     reference_opens,
     summarize,
@@ -163,6 +165,22 @@ def test_aperture_di_riferimento_dai_parquet(spy_parquet_dir: Path) -> None:
     barre = pd.read_parquet(spy_parquet_dir / "SPY.parquet")
     assert set(aperture_reali) == {"SPY"}
     assert aperture_reali["SPY"].iloc[0] == barre["open"].iloc[0]
+
+
+def test_eseguiti_reali_con_slippage_in_valuta(store: StateStore) -> None:
+    """Cento azioni pagate mezzo dollaro sopra l'apertura: cinquanta dollari di slippage."""
+    popola(store, prezzo=100.5)
+    eventi = real_fill_events(store, aperture())
+    assert len(eventi) == 1
+    assert eventi[0].slippage_cost == pytest.approx(50.0)
+    assert eventi[0].commission == 1.0
+    assert real_fill_events(store)[0].slippage_cost == 0.0
+
+
+def test_esposizione_live_dallo_stato(store: StateStore) -> None:
+    store.save_equity(date(2026, 9, 7), 1_000.0, 9_000.0)
+    store.save_equity(date(2026, 9, 8), 5_000.0, 5_000.0)
+    assert list(live_exposure_series(store)) == pytest.approx([0.9, 0.5])
 
 
 def test_record_senza_segnale_non_calcola_il_ritardo() -> None:

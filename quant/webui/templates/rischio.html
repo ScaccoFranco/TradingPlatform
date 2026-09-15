@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block titolo %}Rischio{% endblock %}
+{% block contenuto %}
+<h1>Rischio</h1>
+
+<form class="filtri" method="get" action="/rischio">
+  <label>Finestra
+    <select name="giorni">
+      {% for scelta in scelte %}
+      <option value="{{ scelta }}"{% if scelta == giorni %} selected{% endif %}>{{ scelta }} {{ "giorno" if scelta == 1 else "giorni" }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Mostra</button>
+</form>
+<p class="sottotitolo">Dal {{ dati.dal }} al {{ dati.al }}, giornate UTC del log del live.</p>
+
+{% if not dati.disponibile %}
+<p class="vuoto">{{ dati.nota }}</p>
+{% else %}
+<section>
+  <h2>Anomalie</h2>
+  {% if dati.anomalie %}
+  <div class="scorrevole">
+    <table>
+      <thead><tr><th>Momento</th><th>Evento</th><th>Simbolo</th><th>run_id</th><th>Dettaglio</th></tr></thead>
+      <tbody>
+        {% for anomalia in dati.anomalie %}
+        <tr class="evidenza">
+          <td>{{ anomalia.momento | momento_borsa }}</td>
+          <td><strong>{{ anomalia.evento }}</strong><br><span class="nota">{{ anomalia.evento | descrivi_evento }}</span></td>
+          <td>{{ anomalia.symbol or "-" }}</td>
+          <td class="codice">{{ anomalia.run_id or "-" }}</td>
+          <td class="dettaglio">{{ anomalia.dettaglio or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="vuoto">Nessuna anomalia dal {{ dati.dal }} al {{ dati.al }}: niente RECONCILIATION_MISMATCH, kill switch, esecuzioni fallite o posizioni senza barre.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Decisioni del gestore del rischio</h2>
+  <div class="riquadri">
+    <div class="riquadro{% if dati.rifiutate %} allarme{% endif %}">
+      <span class="etichetta">Rifiutate</span>
+      <span class="valore">{{ dati.rifiutate | length }}</span>
+      <span class="nota">ordini fermati prima dell'esecuzione</span>
+    </div>
+    <div class="riquadro{% if dati.ridotte %} attenzione{% endif %}">
+      <span class="etichetta">Ridotte</span>
+      <span class="valore">{{ dati.ridotte | length }}</span>
+      <span class="nota">ordini passati con una quantita' minore</span>
+    </div>
+    <div class="riquadro">
+      <span class="etichetta">Approvate</span>
+      <span class="valore">{{ dati.approvate | length }}</span>
+      <span class="nota">loggate a DEBUG: in live di solito non compaiono</span>
+    </div>
+  </div>
+
+  {% if not dati.decisioni %}
+  <p class="vuoto">Nessuna decisione del gestore del rischio dal {{ dati.dal }} al {{ dati.al }}.</p>
+  {% else %}
+  <p class="spiegazione">Raggruppate per motivo. Una decisione con piu' motivi, uniti da "+", compare in ogni gruppo che la riguarda.</p>
+  {% for gruppo in dati.gruppi %}
+  <article class="gruppo">
+    <h3><code>{{ gruppo.motivo }}</code> <span class="nota">{{ gruppo.motivo | descrivi_motivo }}</span></h3>
+    <p class="conteggi">rifiutate {{ gruppo.rifiutate | length }} · ridotte {{ gruppo.ridotte | length }}</p>
+    <div class="scorrevole">
+      <table>
+        <thead>
+          <tr><th>Momento</th><th>Esito</th><th>Simbolo</th><th class="num">Richiesta</th><th class="num">Finale</th><th>Motivo completo</th><th>run_id</th></tr>
+        </thead>
+        <tbody>
+          {% for decisione in gruppo.decisioni %}
+          {% set esito = "rifiutata" if decisione.rifiutata else ("ridotta" if decisione.ridotta else "approvata") %}
+          <tr>
+            <td>{{ decisione.momento | momento_borsa }}</td>
+            <td><span class="esito esito-{{ esito }}">{{ esito }}</span></td>
+            <td>{{ decisione.symbol or "-" }}</td>
+            <td class="num">{{ decisione.quantita_richiesta if decisione.quantita_richiesta is not none else "-" }}</td>
+            <td class="num">{{ decisione.quantita_finale if decisione.quantita_finale is not none else "-" }}</td>
+            <td class="codice">{{ decisione.motivo }}</td>
+            <td class="codice">{{ decisione.run_id or "-" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

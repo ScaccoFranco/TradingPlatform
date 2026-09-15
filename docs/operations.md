@@ -9,9 +9,14 @@ costa passare dalla simulazione al mercato.
     uv run python scripts/download.py --update      # aggiorna i Parquet, solo le barre nuove
     uv run python scripts/weekly_report.py          # report della settimana corrente
     uv run python scripts/weekly_report.py --giorno 2026-09-11 --avvio 2026-09-01
+    uv run python scripts/ui.py                     # le stesse misure nel browser
 
 Tutti gli script di analisi sono in sola lettura: aprono lo StateStore, i Parquet e i log,
 e scrivono soltanto dentro `reports/`. Non inviano ordini e non modificano lo stato live.
+
+Fra un report e l'altro, la dashboard mostra lo stesso confronto aggiornato ogni minuto: la
+pagina Performance il tracking error dall'avvio del live e i costi dei due lati, la pagina
+Ordini lo scarto di ogni eseguito dal fill teorico dello shadow. La guida e' in [ui.md](ui.md).
 
 Le decisioni del gestore del rischio e le anomalie arrivano dal log JSON che lo scheduler
 scrive in `logs/live.jsonl`. Se si sposta il file con `QUANT_LOG_FILE`, va passato anche

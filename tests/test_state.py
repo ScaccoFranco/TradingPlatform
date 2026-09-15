@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import sqlite3
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,48 @@ def test_riconciliazione_elenca_solo_le_differenze() -> None:
     assert len(differenze) == 1
     assert differenze[0].symbol == "IEF"
     assert differenze[0].delta == -1
+
+
+def test_ordini_ed_eseguiti_filtrati_per_giornata_e_simbolo(store: StateStore) -> None:
+    for i, (giorno, simbolo) in enumerate([(8, "SPY"), (9, "IEF"), (10, "SPY")]):
+        momento = datetime(2026, 9, giorno, 15, 45)
+        store.record_order(f"id-{i}", OrderEvent(momento, simbolo, OrderDirection.BUY, 10))
+        eseguito = FillEvent(momento + timedelta(hours=18), simbolo, OrderDirection.BUY, 10, 100.0, 1.0)
+        store.record_fill(f"id-{i}", eseguito)
+    store.record_order("id-9", ordine("GLD"), status="submitted")
+
+    assert [o.client_order_id for o in store.find_orders(symbol="SPY")] == ["id-2", "id-0"]
+    assert [o.client_order_id for o in store.find_orders(date(2026, 9, 9), date(2026, 9, 9))] == ["id-1"]
+    assert [f.client_order_id for f in store.find_fills(start=date(2026, 9, 10))] == ["id-2", "id-1"]
+    assert [o.client_order_id for o in store.find_orders(limit=1)] == ["id-9"]
+    assert store.recent_orders(2) == store.find_orders(limit=2)
+    assert [codice for codice, _ in store.pending_orders()] == ["id-9"]
+
+
+def test_eseguiti_recenti_dal_piu_recente(store: StateStore) -> None:
+    for i, prezzo in enumerate([650.0, 651.0, 652.0]):
+        eseguito = FillEvent(MOMENTO + timedelta(days=i), "SPY", OrderDirection.BUY, 10, prezzo, 1.0)
+        store.record_fill(f"id-{i}", eseguito)
+    recenti = store.recent_fills(2)
+    assert [(f.client_order_id, f.fill_price) for f in recenti] == [("id-2", 652.0), ("id-1", 651.0)]
+
+
+def test_sola_lettura_imposta_dal_driver(tmp_path: Path) -> None:
+    """Il lettore non crea il database che manca e non riesce a scrivere su quello che c'e'."""
+    percorso = tmp_path / "data" / "live.db"
+    with pytest.raises(FileNotFoundError):
+        StateStore.read_only(percorso)
+    assert not percorso.parent.exists()
+
+    scrivibile = StateStore(percorso)
+    scrivibile.save_positions({"SPY": 10})
+    scrivibile.close()
+
+    lettore = StateStore.read_only(percorso)
+    assert lettore.load_positions() == {"SPY": 10}
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        lettore.save_positions({})
+    lettore.close()
 
 
 def test_paper_obbligatorio() -> None:

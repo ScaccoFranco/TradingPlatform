@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="{{ aggiornamento }}">
+<title>{% block titolo %}{% endblock %} · quant</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/stile.css">
+</head>
+<body>
+<header class="testata">
+  <span class="marchio">quant</span>
+  <nav>
+    {% for percorso, nome in pagine %}
+    <a href="{{ percorso }}"{% if percorso == pagina %} aria-current="page"{% endif %}>{{ nome }}</a>
+    {% endfor %}
+  </nav>
+  <span class="sola-lettura">sola lettura</span>
+</header>
+<main>
+  {% if avvisi %}
+  <section class="avvisi" aria-label="Avvisi">
+    {% for avviso in avvisi %}
+    <div class="avviso {{ avviso.livello }}" role="{{ 'alert' if avviso.livello == 'allarme' else 'status' }}">
+      <strong>{{ avviso.titolo }}</strong>
+      <p>{{ avviso.dettaglio }}</p>
+      <p class="dove"><span>Dove guardare:</span> {{ avviso.dove }}</p>
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+  {% block contenuto %}{% endblock %}
+</main>
+<footer>
+  Generata {{ generata }} · si aggiorna da sola ogni {{ aggiornamento }} secondi ·
+  da qui non si invia nessun ordine e non si tocca il kill switch
+</footer>
+</body>
+</html>

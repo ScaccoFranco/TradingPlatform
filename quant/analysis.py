@@ -22,12 +22,18 @@ def to_series(equity_curve: Sequence[tuple[datetime, float]]) -> pd.Series:
     return pd.Series([v for _, v in equity_curve], index=timestamps, dtype="float64")
 
 
+def drawdown_series(equity: pd.Series) -> pd.Series:
+    """Distanza dal picco precedente giorno per giorno, in frazione: zero sui massimi."""
+    if equity.empty:
+        return pd.Series(dtype="float64")
+    return equity / equity.cummax() - 1.0
+
+
 def max_drawdown(equity: pd.Series) -> float:
     """Massima perdita dal picco precedente, in frazione."""
     if equity.empty:
         return 0.0
-    picchi = equity.cummax()
-    return float((equity / picchi - 1.0).min())
+    return float(drawdown_series(equity).min())
 
 
 def excess_returns(rendimenti: pd.Series, risk_free: pd.Series | None) -> pd.Series:
@@ -152,15 +158,24 @@ def format_table(metriche: dict[str, dict[str, float]]) -> str:
     righe = ["Metrica".ljust(22) + "".join(n.rjust(larghezza + 2) for n in nomi)]
     righe.append("-" * len(righe[0]))
     in_eccesso = any(m.get("excess", 0.0) > 0.0 for m in metriche.values())
-    for chiave, (etichetta, formato) in ETICHETTE.items():
-        if chiave == "sharpe" and in_eccesso:
-            etichetta = "Sharpe (excess)"
-        valori = "".join(_formatta(metriche[n].get(chiave, 0.0), formato).rjust(larghezza + 2) for n in nomi)
+    for chiave in ETICHETTE:
+        etichetta, formato = metric_label(chiave, in_eccesso)
+        valori = "".join(
+            format_metric(metriche[n].get(chiave, 0.0), formato).rjust(larghezza + 2) for n in nomi
+        )
         righe.append(etichetta.ljust(22) + valori)
     return "\n".join(righe)
 
 
-def _formatta(valore: float, formato: str) -> str:
+def metric_label(chiave: str, in_eccesso: bool = False) -> tuple[str, str]:
+    """Etichetta e formato di una metrica; lo Sharpe dichiara se e' in eccesso sul monetario."""
+    etichetta, formato = ETICHETTE[chiave]
+    if chiave == "sharpe" and in_eccesso:
+        etichetta = "Sharpe (excess)"
+    return etichetta, formato
+
+
+def format_metric(valore: float, formato: str) -> str:
     """Rende leggibile un singolo valore secondo il tipo di metrica."""
     if formato == "pct":
         return f"{valore * 100:.2f}%"

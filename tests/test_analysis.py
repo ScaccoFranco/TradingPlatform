@@ -7,7 +7,16 @@ from datetime import datetime
 import pandas as pd
 from pytest import approx
 
-from quant.analysis import compare, compute_metrics, format_table, max_drawdown, to_series
+from quant.analysis import (
+    compare,
+    compute_metrics,
+    drawdown_series,
+    format_metric,
+    format_table,
+    max_drawdown,
+    metric_label,
+    to_series,
+)
 from quant.events import FillEvent, OrderDirection
 
 
@@ -119,6 +128,21 @@ def test_etichetta_della_tabella_cambia_con_il_tasso() -> None:
     assert "Sharpe (rf=0)" in format_table({"a": compute_metrics(curva)})
     tasso = pd.Series(0.0001, index=to_series(curva).index)
     assert "Sharpe (excess)" in format_table({"a": compute_metrics(curva, risk_free=tasso)})
+
+
+def test_drawdown_giorno_per_giorno_e_suo_minimo() -> None:
+    equity = to_series(curva([100.0, 110.0, 99.0, 121.0]))
+    assert list(drawdown_series(equity)) == approx([0.0, 0.0, -0.1, 0.0])
+    assert max_drawdown(equity) == circa(-0.1)
+    assert drawdown_series(pd.Series(dtype="float64")).empty
+
+
+def test_etichette_e_formati_delle_metriche() -> None:
+    assert metric_label("sharpe") == ("Sharpe (rf=0)", "num")
+    assert metric_label("sharpe", in_eccesso=True) == ("Sharpe (excess)", "num")
+    assert metric_label("max_drawdown") == ("Max drawdown", "pct")
+    assert format_metric(-0.02, "pct") == "-2.00%"
+    assert format_metric(1234.4, "cur") == "1,234"
 
 
 def curva_da(valori: list[float]) -> list[tuple[datetime, float]]:

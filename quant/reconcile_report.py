@@ -7,12 +7,13 @@ scrive solo file di report. Non tocca lo stato live e non manda ordini.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 
+from quant.events import FillEvent
 from quant.logging import get_logger
 from quant.shadow import ShadowResult
 from quant.state import StateStore
@@ -396,3 +397,37 @@ def live_equity_series(store: StateStore, days: int = 400) -> pd.Series:
         index=pd.DatetimeIndex([pd.Timestamp(giorno) for giorno, _, _, _ in righe]),
         dtype="float64",
     )
+
+
+def live_exposure_series(store: StateStore, days: int = 400) -> pd.Series:
+    """Valore delle posizioni in frazione dell'equity, giorno per giorno.
+
+    Lo StateStore salva il valore netto delle posizioni: per un portafoglio solo long,
+    come quello del live, coincide con l'esposizione lorda.
+    """
+    righe = [(giorno, valore / totale) for giorno, _, valore, totale in store.load_equity(days) if totale > 0]
+    if not righe:
+        return pd.Series(dtype="float64")
+    return pd.Series(
+        [esposizione for _, esposizione in righe],
+        index=pd.DatetimeIndex([pd.Timestamp(giorno) for giorno, _ in righe]),
+        dtype="float64",
+    )
+
+
+def real_fill_events(store: StateStore, aperture: dict[str, pd.Series] | None = None) -> list[FillEvent]:
+    """Eseguiti reali come FillEvent, con lo slippage in valuta misurato sull'apertura ufficiale.
+
+    E' la grandezza che il backtest mette in `slippage_cost`, cosi' `compute_metrics`
+    somma costi confrontabili fra live e shadow. Il segno e' positivo quando l'esecuzione
+    e' sfavorevole; senza apertura di riferimento lo slippage vale zero.
+    """
+    aperture = aperture or {}
+    eventi: list[FillEvent] = []
+    for fill in store.load_fills():
+        apertura = _apertura(aperture, fill.symbol, pd.Timestamp(fill.timestamp).date())
+        costo = 0.0
+        if apertura is not None and apertura > 0:
+            costo = _segno(str(fill.direction)) * (fill.fill_price - apertura) * fill.quantity
+        eventi.append(replace(fill, slippage_cost=costo))
+    return eventi

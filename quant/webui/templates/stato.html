@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block titolo %}Stato{% endblock %}
+{% block contenuto %}
+<h1>Stato live</h1>
+
+<section class="riquadri" aria-label="Sintesi">
+  <div class="riquadro">
+    <span class="etichetta">Equity</span>
+    <span class="valore">{{ stato.equity | valuta }}</span>
+    <span class="nota">{% if stato.giorno_equity %}ultima rilevazione {{ stato.giorno_equity }}{% else %}nessuna rilevazione{% endif %}</span>
+  </div>
+  <div class="riquadro">
+    <span class="etichetta">Cassa</span>
+    <span class="valore">{{ stato.cassa | valuta }}</span>
+    <span class="nota">posizioni {{ stato.valore_posizioni | valuta }}</span>
+  </div>
+  <div class="riquadro{% if stato.kill_switch.attivo %} allarme{% endif %}">
+    <span class="etichetta">Kill switch</span>
+    {% if stato.kill_switch.attivo %}
+    <span class="valore">ATTIVO</span>
+    <span class="nota">{{ stato.kill_switch.motivo }}</span>
+    {% else %}
+    <span class="valore">inattivo</span>
+    <span class="nota">file {{ stato.kill_switch.percorso.name }} assente</span>
+    {% endif %}
+  </div>
+  <div class="riquadro{% if stato.ultima_esecuzione and stato.ultima_esecuzione.fallita %} allarme{% endif %}">
+    <span class="etichetta">Ultima esecuzione</span>
+    {% if stato.ultima_esecuzione %}
+    <span class="valore">{{ stato.ultima_esecuzione.momento | momento_borsa }}</span>
+    <span class="nota">
+      {{ stato.ultima_esecuzione.esito }} · run_id {{ stato.ultima_esecuzione.run_id or "-" }}
+      {% if ritardo and not ritardo.nota %} · giornate di borsa trascorse {{ ritardo.sedute | length }}{% endif %}
+    </span>
+    {% else %}
+    <span class="valore">-</span>
+    <span class="nota">{{ stato.nota_log }}</span>
+    {% endif %}
+  </div>
+</section>
+
+<section>
+  <h2>Posizioni attese</h2>
+  {% if stato.posizioni %}
+  <table>
+    <thead><tr><th>Simbolo</th><th class="num">Quantita'</th></tr></thead>
+    <tbody>
+      {% for posizione in stato.posizioni %}
+      <tr><td>{{ posizione.symbol }}</td><td class="num">{{ posizione.quantita }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif stato.disponibile %}
+  <p class="vuoto">Nessuna posizione aperta secondo lo stato salvato.</p>
+  {% else %}
+  <p class="vuoto">{{ stato.nota }}</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Ultimi ordini</h2>
+  {% if ordini.righe %}
+  <div class="scorrevole">
+    <table>
+      <thead>
+        <tr>
+          <th>Registrato</th><th>Simbolo</th><th>Lato</th><th class="num">Quantita'</th>
+          <th>Tipo</th><th>Stato</th><th>client_order_id</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ordine in ordini.righe %}
+        <tr>
+          <td>{{ ordine.timestamp | timestamp_testo }}</td>
+          <td>{{ ordine.symbol }}</td>
+          <td>{{ ordine.direction }}</td>
+          <td class="num">{{ ordine.quantity }}</td>
+          <td>{% if ordine.limit_price is not none %}limit {{ "%.2f" | format(ordine.limit_price) }}{% else %}{{ ordine.order_type }}{% endif %}</td>
+          <td><span class="stato stato-{{ ordine.status | classe_stato }}">{{ ordine.status }}</span></td>
+          <td class="codice">{{ ordine.client_order_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif ordini.disponibile %}
+  <p class="vuoto">Nessun ordine registrato.</p>
+  {% else %}
+  <p class="vuoto">{{ ordini.nota }}</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Sorgenti lette</h2>
+  <dl class="sorgenti">
+    <dt>Stato live</dt><dd>{{ sorgenti.db }}</dd>
+    <dt>Log</dt><dd>{{ sorgenti.log }}</dd>
+    <dt>Kill switch</dt><dd>{{ sorgenti.kill }}</dd>
+    <dt>Calendario</dt><dd>{{ sorgenti.data_dir }}</dd>
+  </dl>
+</section>
+{% endblock %}

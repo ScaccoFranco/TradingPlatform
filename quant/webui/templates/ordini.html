@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block titolo %}Ordini{% endblock %}
+{% block contenuto %}
+<h1>Ordini ed eseguiti</h1>
+
+<form class="filtri" method="get" action="/ordini">
+  <label>Dal <input type="date" name="dal" value="{{ filtro.dal }}"></label>
+  <label>Al <input type="date" name="al" value="{{ filtro.al }}"></label>
+  <label>Simbolo <input type="text" name="simbolo" value="{{ filtro.simbolo or '' }}" size="8" autocomplete="off" spellcheck="false"></label>
+  <button type="submit">Filtra</button>
+  <a href="/ordini">Ultimi {{ giorni_predefiniti }} giorni</a>
+</form>
+{% for errore in filtro.errori %}
+<p class="vuoto">{{ errore }}</p>
+{% endfor %}
+{% if nota_shadow %}
+<p class="vuoto">{{ nota_shadow }}</p>
+{% endif %}
+
+{% if not dati.disponibile %}
+<p class="vuoto">{{ dati.nota }}</p>
+{% else %}
+<div class="riquadri">
+  <div class="riquadro{% if dati.in_attesa %} attenzione{% endif %}">
+    <span class="etichetta">In attesa di esito</span>
+    <span class="valore">{{ dati.in_attesa }}</span>
+    <span class="nota">ordini senza eseguito e non ancora chiusi, su tutto lo storico</span>
+  </div>
+  <div class="riquadro">
+    <span class="etichetta">Ordini nel filtro</span>
+    <span class="valore">{{ dati.ordini | length }}</span>
+    <span class="nota">dal {{ filtro.dal }} al {{ filtro.al }}{% if filtro.simbolo %}, solo {{ filtro.simbolo }}{% endif %}</span>
+  </div>
+  <div class="riquadro">
+    <span class="etichetta">Eseguiti nel filtro</span>
+    <span class="valore">{{ dati.eseguiti | length }}</span>
+    <span class="nota">con lo scarto dallo shadow dove lo shadow ha un fill</span>
+  </div>
+</div>
+
+<section>
+  <h2>Ordini</h2>
+  {% if dati.ordini %}
+  <div class="scorrevole">
+    <table>
+      <thead>
+        <tr>
+          <th>Registrato</th><th>Simbolo</th><th>Lato</th><th class="num">Quantita'</th><th>Tipo</th>
+          <th>Stato</th><th>client_order_id</th><th>broker_order_id</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ordine in dati.ordini %}
+        <tr>
+          <td>{{ ordine.timestamp | timestamp_testo }}</td>
+          <td>{{ ordine.symbol }}</td>
+          <td>{{ ordine.direction }}</td>
+          <td class="num">{{ ordine.quantity }}</td>
+          <td>{% if ordine.limit_price is not none %}limit {{ "%.2f" | format(ordine.limit_price) }}{% else %}{{ ordine.order_type }}{% endif %}</td>
+          <td><span class="stato stato-{{ ordine.status | classe_stato }}">{{ ordine.status }}</span></td>
+          <td class="codice">{{ ordine.client_order_id }}</td>
+          <td class="codice">{{ ordine.broker_order_id or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="vuoto">Nessun ordine dal {{ filtro.dal }} al {{ filtro.al }}{% if filtro.simbolo %} per {{ filtro.simbolo }}{% endif %}.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Eseguiti</h2>
+  {% if dati.eseguiti %}
+  <div class="scorrevole">
+    <table>
+      <thead>
+        <tr>
+          <th>Eseguito</th><th>Simbolo</th><th>Lato</th><th class="num">Quantita'</th><th class="num">Prezzo</th>
+          <th class="num">Commissione</th><th class="num">Slippage vs apertura (bps)</th>
+          <th class="num">Prezzo shadow</th><th class="num">Scarto vs shadow (bps)</th><th>client_order_id</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for riga in dati.eseguiti %}
+        {% set confronto = riga.confronto %}
+        <tr>
+          <td>{{ riga.fill.timestamp | timestamp_testo }}</td>
+          <td>{{ riga.fill.symbol }}</td>
+          <td>{{ riga.fill.direction }}</td>
+          <td class="num">{{ riga.fill.quantity }}</td>
+          <td class="num">{{ "%.2f" | format(riga.fill.fill_price) }}</td>
+          <td class="num">{{ "%.2f" | format(riga.fill.commission) }}</td>
+          <td class="num">{{ (confronto.slippage_real_bps if confronto else none) | bps_opz }}</td>
+          <td class="num">{% if confronto and confronto.theoretical %}{{ "%.2f" | format(confronto.theoretical.price) }}{% else %}-{% endif %}</td>
+          <td class="num">{{ (confronto.diff_bps if confronto else none) | bps_opz }}</td>
+          <td class="codice">{{ riga.fill.client_order_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="spiegazione">
+    Scarti positivi vogliono dire esecuzione peggiore: sopra il riferimento per chi compra, sotto per chi vende.
+    Lo slippage si misura sull'apertura ufficiale nei Parquet, lo scarto sul fill teorico dello shadow della stessa giornata.
+  </p>
+  {% else %}
+  <p class="vuoto">Nessun eseguito dal {{ filtro.dal }} al {{ filtro.al }}{% if filtro.simbolo %} per {{ filtro.simbolo }}{% endif %}.</p>
+  {% endif %}
+</section>
+
+{% if dati.solo_shadow %}
+<section>
+  <h2>Eseguiti teorici senza corrispettivo live</h2>
+  <p class="spiegazione">Lo shadow ha eseguito, il live no: un ordine non inviato, rifiutato o non ancora registrato.</p>
+  <div class="scorrevole">
+    <table>
+      <thead><tr><th>Giorno</th><th>Simbolo</th><th>Lato</th><th class="num">Quantita'</th><th class="num">Prezzo teorico</th></tr></thead>
+      <tbody>
+        {% for confronto in dati.solo_shadow %}
+        <tr>
+          <td>{{ confronto.day }}</td>
+          <td>{{ confronto.symbol }}</td>
+          <td>{{ confronto.theoretical.direction }}</td>
+          <td class="num">{{ confronto.theoretical.quantity }}</td>
+          <td class="num">{{ "%.2f" | format(confronto.theoretical.price) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+{% if dati.troncato %}
+<p class="vuoto">Mostrate solo le righe piu' recenti: restringere il filtro per vedere il resto.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

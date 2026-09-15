@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,13 +9,14 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 from apscheduler.schedulers.background import BackgroundScheduler
+from sintetici import scrivi_log
 
 from quant.events import FillEvent, OrderDirection, OrderEvent
 from quant.live.schedule import ORA_REPORT_SETTIMANALE, build_scheduler, prossime_esecuzioni, weekly_trigger
-from quant.logreader import read_events, risk_decisions, run_days
+from quant.logreader import decisions_by_reason, read_events, risk_decisions, run_days, split_reasons
 from quant.shadow import ShadowResult
 from quant.state import StateStore
-from quant.weekly import build_weekly_report, week_bounds
+from quant.weekly import build_weekly_report, confronto_live, giorni_di_borsa_dopo, week_bounds
 
 LUNEDI = date(2026, 9, 7)
 VENERDI = date(2026, 9, 11)
@@ -77,13 +77,6 @@ def ombra(equity: list[float], prezzo_fill: float = 100.05) -> ShadowResult:
         ],
         fills=[FillEvent(datetime(2026, 9, 8), "SPY", OrderDirection.BUY, 100, prezzo_fill, 1.0)],
     )
-
-
-def scrivi_log(percorso: Path, eventi: list[dict]) -> Path:
-    """Scrive un log JSONL come quello prodotto dal live."""
-    percorso.parent.mkdir(parents=True, exist_ok=True)
-    percorso.write_text("\n".join(json.dumps(e) for e in eventi) + "\n", encoding="utf-8")
-    return percorso
 
 
 def test_confini_della_settimana() -> None:
@@ -264,3 +257,57 @@ def test_provenienza_dello_shadow_in_coda(store: StateStore, dati: Path, tmp_pat
     coda = con.markdown[con.markdown.index("## Provenienza dello shadow") :]
     assert shadow.provenance.hash in coda
     assert con.markdown.rstrip().splitlines()[-1].startswith("- Config:")
+
+
+def test_giorni_di_borsa_dopo_calendario_poi_feriali(dati: Path, calendar_parquet_dir: Path) -> None:
+    """Dentro i Parquet valgono le festivita', oltre l'ultima barra si contano i feriali."""
+    assert giorni_di_borsa_dopo(date(2021, 3, 31), date(2021, 4, 6), calendar_parquet_dir) == [
+        date(2021, 4, 1),
+        date(2021, 4, 5),
+        date(2021, 4, 6),
+    ]
+    assert giorni_di_borsa_dopo(date(2026, 9, 9), date(2026, 9, 15), dati) == [
+        date(2026, 9, 10),
+        date(2026, 9, 11),
+        date(2026, 9, 14),
+        date(2026, 9, 15),
+    ]
+    assert giorni_di_borsa_dopo(VENERDI, VENERDI, dati) == []
+    assert giorni_di_borsa_dopo(VENERDI, date(2026, 9, 14), dati / "vuota") == [date(2026, 9, 14)]
+
+
+def test_confronto_live_misura_i_tre_lati_allo_stesso_modo(store: StateStore, dati: Path) -> None:
+    equity = [CAPITALE * (1 + 0.001 * i) for i in range(5)]
+    popola_store(store, equity, prezzo_fill=100.5)
+    confronto = confronto_live(store, ombra([CAPITALE] * 5, prezzo_fill=100.05), dati)
+
+    assert (confronto.inizio, confronto.fine) == (LUNEDI, VENERDI)
+    assert list(confronto.benchmark) == [100.0, 101.0, 102.0, 103.0, 104.0]
+    assert list(confronto.esposizione) == [1.0] * 5
+    live, shadow = confronto.metriche["live"], confronto.metriche["shadow"]
+    assert live["rendimento_totale"] == pytest.approx(0.004)
+    assert live["slippage"] == pytest.approx(50.0), "100 azioni pagate 0.5 sopra l'apertura di 100"
+    assert (live["n_trade"], live["commissioni"]) == (1.0, 1.0)
+    assert shadow["rendimento_totale"] == 0.0 and shadow["n_trade"] == 1.0
+    assert confronto.metriche["SPY"]["max_drawdown"] == 0.0
+    assert confronto.tracking_error["cumulative_bps"] == pytest.approx(40.0)
+    assert confronto.drawdown["live"].min() == 0.0
+
+    vuoto = confronto_live(None, None, dati)
+    assert vuoto.inizio is None and vuoto.benchmark.empty and vuoto.live.empty
+
+
+def test_motivi_del_rischio_separati_e_raggruppati() -> None:
+    """Il RiskManager unisce i motivi con '+': ognuno conta nel proprio gruppo."""
+    assert split_reasons("MAX_WEIGHT_PER_SYMBOL+MAX_NOTIONAL_PER_ORDER") == (
+        "MAX_WEIGHT_PER_SYMBOL",
+        "MAX_NOTIONAL_PER_ORDER",
+    )
+    assert split_reasons("") == ("SENZA_MOTIVO",)
+    eventi = [
+        {"event": "ordine_ridotto", "reason": "A+B"},
+        {"event": "ordine_rifiutato", "reason": "B"},
+        {"event": "run_conclusa"},
+    ]
+    gruppi = decisions_by_reason(eventi)
+    assert {motivo: len(decisioni) for motivo, decisioni in gruppi.items()} == {"A": 1, "B": 2}

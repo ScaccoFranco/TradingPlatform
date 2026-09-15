@@ -7,14 +7,20 @@ import os
 # I test non devono pagare il costo del log applicativo: in produzione i fill restano INFO.
 os.environ.setdefault("QUANT_LOG_LEVEL", "WARNING")
 
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
+from sintetici import scrivi_log
 
 from quant.config import Settings
+from quant.events import FillEvent, OrderDirection, OrderEvent
+from quant.state import StateStore
+from quant.webui.read import Sorgenti
 
 SYMBOLS = ["SPY", "QQQ", "TLT", "GLD"]
+MOMENTO_LIVE = datetime(2026, 9, 10, 15, 45)
 PREFISSI_SEGRETI = ("ALPACA_", "TELEGRAM_", "TIINGO_")
 
 
@@ -30,6 +36,48 @@ def ambiente_senza_segreti(monkeypatch: pytest.MonkeyPatch) -> None:
     for nome in list(os.environ):
         if nome.startswith(PREFISSI_SEGRETI):
             monkeypatch.delenv(nome, raising=False)
+
+
+@pytest.fixture
+def sorgenti(tmp_path: Path) -> Sorgenti:
+    """Percorsi della dashboard tutti dentro tmp_path, nessuno ancora creato."""
+    return Sorgenti(
+        db=tmp_path / "data" / "live.db",
+        data_dir=tmp_path / "data" / "parquet",
+        reports_dir=tmp_path / "reports",
+        log=tmp_path / "logs" / "live.jsonl",
+        kill=tmp_path / "KILL",
+    )
+
+
+@pytest.fixture
+def popolate(sorgenti: Sorgenti) -> Sorgenti:
+    """StateStore e log di un live sintetico: due giornate di equity, tre ordini eseguiti,
+    due passate concluse e tre decisioni del rischio, una fuori dalla settimana."""
+    store = StateStore(sorgenti.db)
+    store.save_positions({"SPY": 10, "IEF": 4}, MOMENTO_LIVE)
+    store.save_equity(date(2026, 9, 9), 1_000.0, 9_000.0)
+    store.save_equity(date(2026, 9, 10), 500.0, 9_800.0)
+    for i, symbol in enumerate(["SPY", "IEF", "GLD"]):
+        ordine = OrderEvent(MOMENTO_LIVE + timedelta(minutes=i), symbol, OrderDirection.BUY, 10 + i)
+        store.record_order(f"coid-{i}", ordine, run_id="run-b")
+        momento = datetime(2026, 9, 11, 9, 30 + i)
+        store.record_fill(f"coid-{i}", FillEvent(momento, symbol, OrderDirection.BUY, 10 + i, 100.0 + i, 1.0))
+    store.close()
+    scrivi_log(
+        sorgenti.log,
+        [
+            {"event": "ordine_rifiutato", "symbol": "SPY", "quantity_original": 5, "quantity_final": 0,
+             "reason": "MAX_DRAWDOWN", "run_id": "run-0", "timestamp": "2026-09-01T19:45:00Z"},
+            {"event": "run_conclusa", "run_id": "run-a", "timestamp": "2026-09-09T19:45:10Z"},
+            {"event": "ordine_ridotto", "symbol": "QQQ", "quantity_original": 100, "quantity_final": 50,
+             "reason": "MAX_NOTIONAL_PER_ORDER", "run_id": "run-b", "timestamp": "2026-09-10T19:45:00Z"},
+            {"event": "ordine_rifiutato", "symbol": "GLD", "quantity_original": 5, "quantity_final": 0,
+             "reason": "KILL_SWITCH", "run_id": "run-b", "timestamp": "2026-09-10T19:45:01Z"},
+            {"event": "run_conclusa", "run_id": "run-b", "timestamp": "2026-09-10T19:45:02Z"},
+        ],
+    )
+    return sorgenti
 
 
 def make_frame(dates: pd.DatetimeIndex, base: float) -> pd.DataFrame:

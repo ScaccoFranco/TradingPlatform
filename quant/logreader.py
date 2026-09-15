@@ -12,9 +12,20 @@ from quant.logging import PERCORSO_LOG_LIVE
 
 PERCORSO_LOG = PERCORSO_LOG_LIVE
 
-DECISIONI_RISCHIO = ("ordine_approvato", "ordine_ridotto", "ordine_rifiutato")
+ORDINE_APPROVATO = "ordine_approvato"
+ORDINE_RIDOTTO = "ordine_ridotto"
+ORDINE_RIFIUTATO = "ordine_rifiutato"
+DECISIONI_RISCHIO = (ORDINE_APPROVATO, ORDINE_RIDOTTO, ORDINE_RIFIUTATO)
+SEPARATORE_MOTIVI = "+"
+SENZA_MOTIVO = "SENZA_MOTIVO"
 MISMATCH = "RECONCILIATION_MISMATCH"
-ECCEZIONI = ("run_fallita", "kill_switch_attivato")
+RUN_CONCLUSA = "run_conclusa"
+RUN_FALLITA = "run_fallita"
+ESITI_RUN = (RUN_CONCLUSA, RUN_FALLITA)
+KILL_SWITCH_ATTIVATO = "kill_switch_attivato"
+POSIZIONE_SENZA_BARRE = "posizione_senza_barre"
+ECCEZIONI = (RUN_FALLITA, KILL_SWITCH_ATTIVATO)
+ANOMALIE = (RUN_FALLITA, KILL_SWITCH_ATTIVATO, MISMATCH, POSIZIONE_SENZA_BARRE)
 
 
 def read_events(
@@ -48,15 +59,21 @@ def read_events(
     return eventi
 
 
-def event_day(evento: dict[str, Any]) -> date | None:
-    """Giornata di un evento, ricavata dal timestamp ISO."""
+def event_time(evento: dict[str, Any]) -> datetime | None:
+    """Istante di un evento, ricavato dal timestamp ISO."""
     grezzo = evento.get("timestamp")
     if not isinstance(grezzo, str):
         return None
     try:
-        return datetime.fromisoformat(grezzo.replace("Z", "+00:00")).date()
+        return datetime.fromisoformat(grezzo.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def event_day(evento: dict[str, Any]) -> date | None:
+    """Giornata di un evento, ricavata dal timestamp ISO."""
+    momento = event_time(evento)
+    return momento.date() if momento is not None else None
 
 
 def by_event(eventi: Iterable[dict[str, Any]], nomi: Sequence[str]) -> list[dict[str, Any]]:
@@ -70,6 +87,24 @@ def risk_decisions(eventi: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return by_event(eventi, DECISIONI_RISCHIO)
 
 
+def split_reasons(reason: str) -> tuple[str, ...]:
+    """Motivi RiskReason di una decisione: `RiskManager.decide` li unisce con '+'."""
+    return tuple(parte for parte in reason.split(SEPARATORE_MOTIVI) if parte) or (SENZA_MOTIVO,)
+
+
+def decisions_by_reason(eventi: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Decisioni del rischio raggruppate per motivo, nell'ordine della prima comparsa.
+
+    Una decisione con due motivi, per esempio ridotta per peso e per controvalore,
+    compare in entrambi i gruppi: ogni gruppo dice quante volte quel limite ha agito.
+    """
+    gruppi: dict[str, list[dict[str, Any]]] = {}
+    for evento in risk_decisions(eventi):
+        for motivo in split_reasons(str(evento.get("reason", ""))):
+            gruppi.setdefault(motivo, []).append(evento)
+    return gruppi
+
+
 def mismatches(eventi: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Disallineamenti di riconciliazione."""
     return by_event(eventi, [MISMATCH])
@@ -80,11 +115,26 @@ def failures(eventi: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return by_event(eventi, ECCEZIONI)
 
 
+def anomalies(eventi: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Eventi che chiedono una persona: eccezioni, kill switch, disallineamenti, posizioni ferme."""
+    return by_event(eventi, ANOMALIE)
+
+
 def run_days(eventi: Iterable[dict[str, Any]]) -> set[date]:
     """Giornate in cui il runner ha effettivamente concluso una passata."""
     giorni = set()
-    for evento in by_event(eventi, ["run_conclusa"]):
+    for evento in by_event(eventi, [RUN_CONCLUSA]):
         giorno = event_day(evento)
         if giorno is not None:
             giorni.add(giorno)
     return giorni
+
+
+def last_run(eventi: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
+    """Ultima passata del runner arrivata in fondo, conclusa o fallita.
+
+    Il log e' append-only, quindi l'ultima in ordine di scrittura e' anche la piu'
+    recente: non serve confrontare timestamp che potrebbero mancare.
+    """
+    esiti = by_event(eventi, ESITI_RUN)
+    return esiti[-1] if esiti else None

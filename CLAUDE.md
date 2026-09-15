@@ -17,6 +17,7 @@ strutturale, non un controllo a posteriori: lo stesso codice deve poter girare i
     uv run python scripts/live.py                      # scheduler del paper trading
     uv run python scripts/status.py                    # posizioni, equity, ultimi ordini
     uv run python scripts/weekly_report.py             # live contro shadow backtest
+    uv run python scripts/ui.py                        # dashboard di sola lettura su 127.0.0.1:8000
 
 ## Architettura
 
@@ -54,7 +55,8 @@ sul close, poi la strategia.
 | `quant/validation.py` | `run_backtest`, walk-forward, sensitivita', Deflated Sharpe |
 | `quant/research/` | Script di ricerca, eseguibili con `python -m` |
 | `quant/state.py`, `quant/brokers/`, `quant/live/` | Paper trading, vedi Fase 3 |
-| `quant/shadow.py`, `quant/reconcile_report.py`, `quant/weekly.py` | Confronto live, vedi Fase 4 |
+| `quant/shadow.py`, `quant/reconcile_report.py`, `quant/logreader.py`, `quant/weekly.py` | Confronto live, vedi Fase 4 |
+| `quant/webui/` | Dashboard locale di sola lettura: strato dati, avvisi, grafici SVG, template, vedi Fase 6 |
 | `scripts/` | Involucri sottili da riga di comando, nessuna logica propria |
 
 ## Regole di dominio, non negoziabili
@@ -123,7 +125,8 @@ sul close, poi la strategia.
 ## Convenzioni
 
 Python 3.12. Dipendenze runtime: pandas, pyarrow, yfinance, requests, matplotlib, structlog,
-piu' alpaca-py, apscheduler e pydantic-settings per il live. Nessun framework di backtesting
+piu' alpaca-py, apscheduler e pydantic-settings per il live, fastapi, uvicorn e jinja2 per la
+dashboard; in sviluppo httpx per il `TestClient`. Nessun framework di backtesting
 esterno. Type hints ovunque, dataclass frozen per gli eventi, ABC per le interfacce.
 Docstring brevi in italiano, niente commenti superflui. I parametri di un backtest passano
 da `BacktestConfig`: gli argomenti sciolti di `run_backtest` sono deprecati. Il pacchetto
@@ -131,6 +134,29 @@ e' installato in modalita' editabile, quindi nessun modulo manipola `sys.path`.
 I test non toccano la rete: usano Parquet sintetici costruiti nelle fixture. I dati dal
 2019-01-01 in poi sono riservati alla validazione out-of-sample e non vanno usati nei test
 ne' negli script di sviluppo.
+
+## README sempre allineato
+
+`README.md` descrive moduli, comandi, output e comportamento visibile del sistema. Ogni
+modifica importante lo aggiorna nello stesso commit, senza aspettare che qualcuno lo chieda.
+E' importante una modifica che cambia qualcosa che il README racconta:
+
+- un modulo aggiunto, rimosso, rinominato o con responsabilita' diverse: sezione "I moduli
+  nel dettaglio", e la tabella "Struttura del pacchetto" qui sopra;
+- un comando, uno script, un'opzione da riga di comando o una variabile d'ambiente: "Come si
+  usa" e "Configurazione";
+- cio' che l'utente vede: righe in console, report e file in `reports/`, messaggi Telegram,
+  codici di uscita, output di `scripts/status.py`: "Come si usa" e "Dove finisce ogni cosa";
+- job o orari dello scheduler, limiti del rischio in live, universo o parametri di default
+  della strategia, campi e default di `BacktestConfig`: le sezioni che li riportano;
+- regole di dominio, fasi del loop, differenze fra backtest e live: "Architettura".
+
+Refactoring interni, correzioni che non cambiano il comportamento e nuovi test non lo
+richiedono. Prima di chiudere un lavoro si rilegge la parte di README toccata dalla modifica
+e si verifica che dica ancora il vero; se la modifica riguarda anche una guida in `docs/`,
+si aggiorna pure quella. Nel messaggio finale si dice quali sezioni del README sono cambiate,
+oppure che non serviva cambiarle. Lo stile resta quello del file: italiano, apostrofo al
+posto delle lettere accentate, esempi di output nel formato che il codice produce davvero.
 
 ## Dati di qualita' produzione (Fase 5)
 
@@ -158,8 +184,9 @@ parere con `--source yfinance`. Guida completa in `docs/data.md`.
 
 ## Live (Fase 3)
 
-`scripts/live.py` avvia lo scheduler APScheduler: run alle 15:45 ET, riconciliazione alle
-09:35 ET, entrambi sul fuso di New York e con le festivita' prese dal calendario Alpaca.
+`scripts/live.py` avvia lo scheduler APScheduler: run alle 15:45 ET e riconciliazione alle
+09:35 ET nei giorni di borsa, report settimanale il lunedi' alle 08:00 ET, tutti sul fuso di
+New York e con le festivita' prese dal calendario Alpaca.
 `quant/live/runner.py` esegue una passata: stato, barre, segnali, rischio, esecuzione,
 persistenza, riconciliazione. `quant/brokers/` contiene gli adapter Alpaca, `quant/state.py`
 lo stato su SQLite. Guida operativa completa in `docs/live.md`.
@@ -195,6 +222,31 @@ produce il markdown settimanale con grafico. Guida di lettura in `docs/operation
 - **Regola sui parametri.** Dal confronto si aggiornano solo i costi del backtest, mai i
   parametri della strategia: il periodo live e' l'unico dato fuori campione rimasto.
 
+## Interfaccia (Fase 6)
+
+`scripts/ui.py` avvia una dashboard FastAPI su `127.0.0.1:8000`: stato live, performance
+contro shadow e SPY, ordini ed eseguiti, decisioni del rischio, report. `quant/webui/`
+contiene strato dati, avvisi, grafici e template. Guida in `docs/ui.md`.
+
+- **Sola lettura imposta, non promessa.** Lo StateStore si apre con `StateStore.read_only`,
+  URI SQLite `mode=ro`: una scrittura solleva nel driver, un database assente non viene
+  creato. Nessun modulo della UI importa i broker, tutte le rotte sono GET, niente cookie ne'
+  sessioni, il file `KILL` si legge soltanto. L'avvio toglie `QUANT_LOG_FILE` prima di
+  creare logger, cosi' la dashboard non scrive nel log del live.
+- **Solo loopback.** Senza autenticazione un indirizzo raggiungibile da fuori esporrebbe
+  posizioni e ordini: `--host` accetta solo `127.0.0.x` o `localhost` ed esce con codice 2
+  spiegando perche'. L'header Host e' controllato contro il DNS rebinding. Da un altro
+  computer si passa da un tunnel SSH.
+- **Nessun calcolo nella UI.** I numeri vengono da `analysis`, `reconcile_report`, `weekly`,
+  `logreader` e `state`; quello che mancava e' stato aggiunto li' con i suoi test, per esempio
+  `confronto_live`, `drawdown_series`, `real_fill_events`, `decisions_by_reason`.
+- **Shadow in memoria.** Performance e Ordini rigiocano lo shadow con `weekly.shadow_live` e
+  lo tengono finche' non cambiano giornata o Parquet: la pagina si ricarica ogni minuto, il
+  backtest costa secondi. Nei test lo shadow si inietta in `create_app`.
+- **Niente JavaScript.** Grafici matplotlib senza pyplot esportati in SVG inline, con i
+  colori come variabili CSS per il tema chiaro e scuro; aggiornamento con `meta refresh`;
+  una Content-Security-Policy che non carica niente da fuori.
+
 ## Qualita'
 
     uv run pytest          # suite offline, test property-based inclusi
@@ -208,7 +260,7 @@ Durante i test il log applicativo e' a WARNING, impostato in `tests/conftest.py`
 
 ## Stato
 
-Fasi 1, 2, 2.5, 3, 4 e 5 complete. Gli script di ricerca stanno in `quant/research/`, gli
+Fasi 1, 2, 2.5, 3, 4, 5 e 6 complete. Gli script di ricerca stanno in `quant/research/`, gli
 output in `reports/`, che non e' versionato. Il confronto usa benchmark ribilanciati
 mensilmente: senza ribilanciamento le cedole resterebbero ferme in cassa e il paragone
 favorirebbe la strategia attiva.

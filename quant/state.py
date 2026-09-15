@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from quant.events import FillEvent, OrderDirection, OrderEvent
@@ -13,6 +13,8 @@ from quant.logging import get_logger
 
 PERCORSO_DB = Path("data/live.db")
 MISMATCH = "RECONCILIATION_MISMATCH"
+ESEGUITO = "filled"
+STATI_CONCLUSI = (ESEGUITO, "canceled", "expired", "rejected")
 logger = get_logger("state")
 
 SCHEMA = """
@@ -80,6 +82,19 @@ class StoredOrder:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class StoredFill:
+    """Riga della tabella eseguiti, con l'identificativo dell'ordine che l'ha generata."""
+
+    client_order_id: str
+    timestamp: str
+    symbol: str
+    direction: str
+    quantity: int
+    fill_price: float
+    commission: float
+
+
 class StateStore:
     """Persistenza dello stato live: sopravvive al riavvio del processo."""
 
@@ -90,6 +105,24 @@ class StateStore:
         self.connection = sqlite3.connect(self.path, isolation_level=None)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+
+    @classmethod
+    def read_only(cls, path: str | Path = PERCORSO_DB) -> StateStore:
+        """Apre un database esistente in sola lettura, imposta dal driver SQLite.
+
+        Non crea cartelle, file ne' tabelle: ogni scrittura sulla connessione solleva
+        `sqlite3.OperationalError`. Chi mostra lo stato non deve poterlo cambiare.
+        """
+        percorso = Path(path)
+        if not percorso.is_file():
+            raise FileNotFoundError(percorso)
+        store = cls.__new__(cls)
+        store.path = percorso
+        store.connection = sqlite3.connect(
+            f"{percorso.resolve().as_uri()}?mode=ro", uri=True, isolation_level=None
+        )
+        store.connection.row_factory = sqlite3.Row
+        return store
 
     def close(self) -> None:
         """Chiude la connessione."""
@@ -148,8 +181,15 @@ class StateStore:
 
     def recent_orders(self, limit: int = 10) -> list[StoredOrder]:
         """Ultimi ordini registrati, dal piu' recente."""
+        return self.find_orders(limit=limit)
+
+    def find_orders(
+        self, start: date | None = None, end: date | None = None, symbol: str | None = None, limit: int = 500
+    ) -> list[StoredOrder]:
+        """Ordini registrati fra due giornate comprese e per un simbolo, dal piu' recente."""
+        where, parametri = _filtro(start, end, symbol)
         righe = self.connection.execute(
-            "SELECT * FROM orders ORDER BY timestamp DESC, rowid DESC LIMIT ?", (limit,)
+            f"SELECT * FROM orders{where} ORDER BY timestamp DESC, rowid DESC LIMIT ?", (*parametri, limit)
         ).fetchall()
         return [
             StoredOrder(
@@ -166,18 +206,45 @@ class StateStore:
             for r in righe
         ]
 
+    def recent_fills(self, limit: int = 10) -> list[StoredFill]:
+        """Ultimi eseguiti registrati, dal piu' recente."""
+        return self.find_fills(limit=limit)
+
+    def find_fills(
+        self, start: date | None = None, end: date | None = None, symbol: str | None = None, limit: int = 500
+    ) -> list[StoredFill]:
+        """Eseguiti registrati fra due giornate comprese e per un simbolo, dal piu' recente."""
+        where, parametri = _filtro(start, end, symbol)
+        righe = self.connection.execute(
+            f"SELECT * FROM fills{where} ORDER BY timestamp DESC, rowid DESC LIMIT ?", (*parametri, limit)
+        ).fetchall()
+        return [
+            StoredFill(
+                client_order_id=r["client_order_id"],
+                timestamp=r["timestamp"],
+                symbol=r["symbol"],
+                direction=r["direction"],
+                quantity=r["quantity"],
+                fill_price=r["fill_price"],
+                commission=r["commission"],
+            )
+            for r in righe
+        ]
+
     def pending_orders(self) -> list[tuple[str, OrderEvent]]:
         """Ordini inviati e non ancora conclusi, ricostruiti dal database.
 
         Serve dopo un riavvio: l'handler in memoria non sa piu' nulla degli ordini
         di ieri, ma i loro eseguiti devono comunque arrivare al portafoglio.
         """
+        segnaposto = ", ".join("?" for _ in STATI_CONCLUSI)
         righe = self.connection.execute(
-            """SELECT o.* FROM orders o
+            f"""SELECT o.* FROM orders o
                LEFT JOIN fills f ON f.client_order_id = o.client_order_id
                WHERE f.client_order_id IS NULL
-                 AND o.status NOT IN ('filled', 'canceled', 'expired', 'rejected')
-               ORDER BY o.timestamp"""
+                 AND o.status NOT IN ({segnaposto})
+               ORDER BY o.timestamp""",
+            STATI_CONCLUSI,
         ).fetchall()
         return [
             (
@@ -291,3 +358,19 @@ def reconcile(expected: Mapping[str, int], actual: Mapping[str, int]) -> list[Po
             delta=differenza.delta,
         )
     return differenze
+
+
+def _filtro(start: date | None, end: date | None, symbol: str | None) -> tuple[str, tuple[object, ...]]:
+    """Clausola WHERE per giornata e simbolo: i timestamp ISO si confrontano come testo."""
+    condizioni: list[str] = []
+    parametri: list[object] = []
+    if start is not None:
+        condizioni.append("timestamp >= ?")
+        parametri.append(start.isoformat())
+    if end is not None:
+        condizioni.append("timestamp < ?")
+        parametri.append((end + timedelta(days=1)).isoformat())
+    if symbol:
+        condizioni.append("symbol = ?")
+        parametri.append(symbol)
+    return (" WHERE " + " AND ".join(condizioni) if condizioni else ""), tuple(parametri)

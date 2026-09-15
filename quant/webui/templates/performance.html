@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block titolo %}Performance{% endblock %}
+{% block contenuto %}
+{% set confronto = dati.confronto %}
+<h1>Performance</h1>
+{% if confronto and confronto.inizio %}
+<p class="sottotitolo">
+  Dal {{ confronto.inizio }} al {{ confronto.fine }}: live registrato nello stato, shadow rigiocato sui
+  Parquet definitivi, SPY come mercato.
+</p>
+{% else %}
+<p class="vuoto">Nessun periodo da confrontare: mancano sia l'equity live sia lo shadow.</p>
+{% endif %}
+{% for nota in [dati.nota, dati.nota_shadow] if nota %}
+<p class="vuoto">{{ nota }}</p>
+{% endfor %}
+
+{% if confronto and confronto.inizio %}
+<section>
+  <h2>Equity</h2>
+  <p class="spiegazione">Ogni curva a base 100 dal suo primo giorno, in scala logaritmica: conta la forma, non il livello.</p>
+  {% if grafici.equity %}
+  <figure class="grafico">{{ grafici.equity | safe }}</figure>
+  {% else %}
+  <p class="vuoto">Servono almeno due giornate per disegnare una curva.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Drawdown</h2>
+  <p class="spiegazione">Distanza dal massimo precedente, giorno per giorno.</p>
+  {% if grafici.drawdown %}
+  <figure class="grafico">{{ grafici.drawdown | safe }}</figure>
+  {% else %}
+  <p class="vuoto">Servono almeno due giornate per disegnare una curva.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Esposizione del live</h2>
+  <p class="spiegazione">
+    Valore delle posizioni in frazione dell'equity, dallo stato salvato. Per un portafoglio solo long
+    coincide con l'esposizione lorda. Lo shadow non registra le posizioni giorno per giorno, quindi qui non compare.
+  </p>
+  {% if grafici.esposizione %}
+  <figure class="grafico">{{ grafici.esposizione | safe }}</figure>
+  {% else %}
+  <p class="vuoto">Servono almeno due rilevazioni di equity live.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Scostamento fra live e shadow</h2>
+  {% set te = confronto.tracking_error %}
+  {% if te.days >= 2 %}
+  <div class="riquadri">
+    <div class="riquadro">
+      <span class="etichetta">Tracking error cumulato</span>
+      <span class="valore">{{ te.cumulative_bps | bps }}</span>
+      <span class="nota">rendimento live meno rendimento shadow, su {{ te.days | int }} giornate comuni</span>
+    </div>
+    <div class="riquadro">
+      <span class="etichetta">Tracking error giornaliero</span>
+      <span class="valore">{{ "%.1f" | format(te.daily_bps) }} bps</span>
+      <span class="nota">deviazione standard della differenza dei rendimenti giornalieri</span>
+    </div>
+  </div>
+  {% else %}
+  <p class="vuoto">Non calcolabile: servono almeno due giornate presenti sia nel live sia nello shadow.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Metriche</h2>
+  <div class="scorrevole">
+    <table>
+      <thead>
+        <tr><th>Metrica</th>{% for nome in colonne %}<th class="num"><span class="chiave serie-{{ loop.index }}"></span>{{ nome }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for riga in metriche %}
+        <tr><td>{{ riga.etichetta }}</td>{% for valore in riga.valori %}<td class="num">{{ valore }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="spiegazione">
+    Tutte le colonne vengono da <code>compute_metrics</code>, con lo stesso tasso privo di rischio. Lo slippage
+    live e' misurato contro l'apertura ufficiale, quello dello shadow e' il simulato; positivo vuol dire a sfavore.
+    Su poche settimane CAGR e rapporti annualizzati sono molto instabili.
+  </p>
+</section>
+{% endif %}
+{% endblock %}

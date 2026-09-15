@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from quant.analysis import compute_metrics, drawdown_series
+from quant.config import BacktestConfig
+from quant.events import FillEvent
 from quant.logging import get_logger
 from quant.logreader import (
     PERCORSO_LOG,
@@ -29,10 +32,13 @@ from quant.reconcile_report import (
     ReconcileSummary,
     compare,
     live_equity_series,
+    live_exposure_series,
+    real_fill_events,
     real_fills,
     reference_opens,
     summarize,
     theoretical_fills,
+    tracking_error,
 )
 from quant.shadow import ShadowResult
 from quant.state import StateStore
@@ -45,6 +51,7 @@ SOGLIA_TRACKING_ERROR_BPS = 50.0
 SOGLIA_RAPPORTO_SLIPPAGE = 2.0
 BENCHMARK = "SPY"
 BASE = 100.0
+RISK_FREE = BacktestConfig().risk_free_symbol
 
 
 @dataclass(slots=True)
@@ -121,6 +128,127 @@ def giorni_di_borsa(inizio: date, fine: date, path: str | Path = PERCORSO_DATI) 
         return [g for g in pd.date_range(inizio, fine).date if g.weekday() < 5]
     finestra = serie.loc[str(inizio) : str(fine)]
     return [d.date() for d in finestra.index]
+
+
+def giorni_di_borsa_dopo(giorno: date, fino: date, path: str | Path = PERCORSO_DATI) -> list[date]:
+    """Giornate di borsa successive a `giorno`, fino a `fino` compreso.
+
+    Fin dove arrivano i Parquet vale il calendario del benchmark; oltre l'ultima barra
+    salvata, che non contiene mai la seduta in corso, si contano i giorni feriali. Cosi'
+    dati non aggiornati non nascondono le giornate in cui il runner non ha girato.
+    """
+    if fino <= giorno:
+        return []
+    serie = benchmark_series(path)
+    noti: list[date] = []
+    ultima_barra = giorno
+    if not serie.empty:
+        noti = [d.date() for d in serie.loc[str(giorno + timedelta(days=1)) : str(fino)].index]
+        ultima_barra = max(giorno, serie.index[-1].date())
+    feriali = [g for g in pd.date_range(ultima_barra + timedelta(days=1), fino).date if g.weekday() < 5]
+    return noti + feriali
+
+
+def risk_free_returns(path: str | Path = PERCORSO_DATI, symbol: str | None = RISK_FREE) -> pd.Series:
+    """Rendimenti giornalieri del monetario presi dai Parquet, come fa `run_backtest`."""
+    if symbol is None:
+        return pd.Series(dtype="float64")
+    return benchmark_series(path, symbol).pct_change().dropna()
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class ConfrontoLive:
+    """Live, shadow e benchmark sullo stesso periodo, misurati con la stessa `compute_metrics`."""
+
+    inizio: date | None
+    fine: date | None
+    live: pd.Series
+    shadow: pd.Series
+    benchmark: pd.Series
+    esposizione: pd.Series
+    drawdown: dict[str, pd.Series]
+    metriche: dict[str, dict[str, float]]
+    tracking_error: dict[str, float]
+
+
+def confronto_live(
+    store: StateStore | None,
+    shadow: ShadowResult | None,
+    data_path: str | Path = PERCORSO_DATI,
+    risk_free_symbol: str | None = RISK_FREE,
+) -> ConfrontoLive:
+    """Quello che serve a confrontare live, shadow e benchmark sul periodo del live.
+
+    Le tre colonne di metriche escono dalla stessa `compute_metrics` con lo stesso tasso
+    privo di rischio. Lo slippage live e' misurato contro l'apertura ufficiale, quello
+    dello shadow e' il simulato. Il benchmark copre il periodo di live e shadow insieme.
+    Un lato assente resta una serie vuota, non un errore.
+    """
+    vuota = pd.Series(dtype="float64")
+    live = live_equity_series(store) if store is not None else vuota
+    ombra = shadow.equity_series() if shadow is not None else vuota
+    presenti = [serie for serie in (live, ombra) if not serie.empty]
+    inizio = min(serie.index[0] for serie in presenti).date() if presenti else None
+    fine = max(serie.index[-1] for serie in presenti).date() if presenti else None
+    mercato = _nel_periodo(benchmark_series(data_path), inizio, fine)
+    tasso = risk_free_returns(data_path, risk_free_symbol)
+
+    reali: list[FillEvent] = []
+    esposizione = vuota
+    if store is not None:
+        simboli = {fill.symbol for fill in store.load_fills()}
+        reali = real_fill_events(store, reference_opens(simboli, data_path))
+        esposizione = live_exposure_series(store)
+
+    metriche = {
+        "live": compute_metrics(_curva(live), reali, risk_free=tasso),
+        "shadow": compute_metrics(
+            shadow.equity_curve if shadow else [], shadow.fills if shadow else [], risk_free=tasso
+        ),
+        BENCHMARK: compute_metrics(_curva(mercato), risk_free=tasso),
+    }
+    return ConfrontoLive(
+        inizio=inizio,
+        fine=fine,
+        live=live,
+        shadow=ombra,
+        benchmark=mercato,
+        esposizione=esposizione,
+        drawdown={
+            "live": drawdown_series(live),
+            "shadow": drawdown_series(ombra),
+            BENCHMARK: drawdown_series(mercato),
+        },
+        metriche=metriche,
+        tracking_error=tracking_error(live, ombra),
+    )
+
+
+def shadow_live(
+    giorno: date | None = None, avvio: str | None = None, dati: str | Path = PERCORSO_DATI
+) -> ShadowResult:
+    """Lo shadow del live: strategia, universo e avvio di `quant.live.deployment`, fino a `giorno`.
+
+    L'import sta dentro la funzione: chi legge soltanto, come la dashboard, non carica il
+    pacchetto live finche' non chiede davvero lo shadow.
+    """
+    from quant.live.deployment import AVVIO_LIVE, SIMBOLI, strategy_factory
+    from quant.shadow import ShadowBacktest
+
+    rigiocata = ShadowBacktest(strategy_factory, avvio or AVVIO_LIVE, SIMBOLI, path=dati)
+    return rigiocata.run(end=giorno or date.today())
+
+
+def _nel_periodo(serie: pd.Series, inizio: date | None, fine: date | None) -> pd.Series:
+    """Tratto della serie fra le due date comprese; vuota se manca la serie o il periodo."""
+    if serie.empty or inizio is None or fine is None:
+        return pd.Series(dtype="float64")
+    return serie.loc[str(inizio) : str(fine)]
+
+
+def _curva(serie: pd.Series) -> list[tuple[datetime, float]]:
+    """Serie nella forma di equity curve che vuole `compute_metrics`."""
+    return [(pd.Timestamp(momento).to_pydatetime(), float(valore)) for momento, valore in serie.items()]
 
 
 def _tabella_fill(confronti: Sequence[FillComparison]) -> str:
@@ -379,12 +507,10 @@ def generate_weekly_report(
     Usa la strategia e l'universo dichiarati in `quant.live.deployment`, gli stessi
     che gira lo scheduler. Apre lo StateStore solo per leggerlo.
     """
-    from quant.live.deployment import AVVIO_LIVE, SIMBOLI, strategy_factory
-    from quant.shadow import ShadowBacktest
     from quant.state import PERCORSO_DB
 
     giorno = giorno or date.today()
-    ombra = ShadowBacktest(strategy_factory, avvio or AVVIO_LIVE, SIMBOLI, path=dati).run(end=giorno)
+    ombra = shadow_live(giorno, avvio, dati)
     store = StateStore(db or PERCORSO_DB)
     try:
         return build_weekly_report(

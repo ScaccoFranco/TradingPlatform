@@ -1,12 +1,30 @@
-"""Barre sintetiche, sorgente e alerter finti, condivisi dai test della catena dati."""
+"""Barre sintetiche, log del live, sorgente e alerter finti, condivisi dai test."""
 
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 from quant.sources import DataSource, DataSourceError, Giorno
+
+
+def scrivi_log(percorso: Path, eventi: list[dict[str, Any]]) -> Path:
+    """Scrive un log JSONL come quello prodotto dal live."""
+    percorso.parent.mkdir(parents=True, exist_ok=True)
+    percorso.write_text("\n".join(json.dumps(e) for e in eventi) + "\n", encoding="utf-8")
+    return percorso
+
+
+def accoda_log(percorso: Path, *eventi: dict[str, Any]) -> Path:
+    """Aggiunge righe in coda al log, come fa il live a ogni esecuzione."""
+    with percorso.open("a", encoding="utf-8") as file:
+        for evento in eventi:
+            file.write(json.dumps(evento) + "\n")
+    return percorso
 
 
 def adj_coerente(frame: pd.DataFrame) -> pd.Series:
